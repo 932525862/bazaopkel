@@ -143,6 +143,16 @@ function clampToMax(val: string, max: number): string {
   return val;
 }
 
+// Suzuvchi nuqta (IEEE) shovqinini tozalaydi: 2 - 1.77 = 0.22999999… → 0.23.
+// Biznes mantiqni O'ZGARTIRMAYDI — faqat ayirish/qo'shishdan kelib chiqadigan
+// mikro-xatolikni (12 dan ortiq kasr) yaxlitlab, haqiqiy qiymatni saqlaydi.
+// Ayirmalar (masalan qolgan joy) hisoblangan joyda qo'llansa, quyi oqimdagi
+// barcha ko'rinish va input qiymatlari avtomatik toza bo'ladi.
+function clean(v: number): number {
+  if (!Number.isFinite(v)) return 0;
+  return Math.round(v * 1e6) / 1e6;
+}
+
 // ── Qisman (yoki to'liq) chiqim ulushini YAGONA joyda hisoblovchi funksiya ──
 // MUHIM: dona (tovar soni) — BUTUN son bo'lishi shart, chunki mahsulotni bo'lib
 // (0.66 dona) chiqim qilib bo'lmaydi. Shu sabab avval butun dona aniqlanadi,
@@ -4650,9 +4660,9 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
                         const isSelected = selectedProductIds.has(p.id);
                         const mode = productModes[p.id] ?? "full";
                         const partial = partialInputs[p.id];
-                        const totalJoys = p.places.reduce((s, pl) => s + (parseFloat(pl.count) || 0), 0);
-                        const alreadyDispatched = (kr.dispatchedPlaces ?? {})[p.id] ?? 0;
-                        const remainingJoys = Math.max(0, totalJoys - alreadyDispatched);
+                        const totalJoys = clean(p.places.reduce((s, pl) => s + (parseFloat(pl.count) || 0), 0));
+                        const alreadyDispatched = clean((kr.dispatchedPlaces ?? {})[p.id] ?? 0);
+                        const remainingJoys = clean(Math.max(0, totalJoys - alreadyDispatched));
                         const isPartiallyDispatched = alreadyDispatched > 0;
                         return (
                           <div
@@ -4716,7 +4726,7 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
                                         : "bg-white border-gray-200 text-gray-500 hover:border-blue-300 hover:text-blue-600"
                                     }`}
                                   >
-                                    Barchasi ({remainingJoys} joy)
+                                    Barchasi ({fmt2(remainingJoys)} joy)
                                   </button>
                                   <button
                                     onClick={() => setProductMode(p.id, "partial")}
