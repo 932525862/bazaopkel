@@ -5,3 +5,4 @@ import { getRouter } from "./router";
 const router = getRouter();
 //@ts-ignore
 hydrateRoot(document, <StartClient router={router} />);
+// git ulandi
