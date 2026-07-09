@@ -130,6 +130,9 @@ export function WarehouseKirimWizard({ warehouseId, onClose, onSaved }: Props) {
   const [clientName, setClientName] = useState("");
   const [clientPhone, setClientPhone] = useState("");
   const [clientError, setClientError] = useState("");
+  // Mijozlar backend'dan yuklanadi — localStorage keshiga bog'liq bo'lmaslik uchun.
+  const [clients, setClients] = useState<any[]>([]);
+  const [clientsLoading, setClientsLoading] = useState(true);
 
   // Step 2 – Topshiriq
   const [taskDescription, setTaskDescription] = useState("");
@@ -174,22 +177,49 @@ export function WarehouseKirimWizard({ warehouseId, onClose, onSaved }: Props) {
       .catch(() => {});
   }, []);
 
+  // Fetch clients from API on mount — kod bo'yicha qidiruv server ma'lumotidan ishlaydi,
+  // Mijozlar sahifasiga oldin kirilgan-kirilmaganidan qat'i nazar.
+  useEffect(() => {
+    setClientsLoading(true);
+    API.clients()
+      .then(list => setClients(list))
+      .catch(() => setClients([]))
+      .finally(() => setClientsLoading(false));
+  }, []);
+
   // ── Client lookup ──────────────────────────────────────
   const lookupClient = (code: string) => {
     setClientError("");
     const norm = code.toUpperCase().trim();
     if (!norm) { setClientName(""); setClientPhone(""); return; }
-    const found = Object.entries(storedIds).find(([, v]) => v === norm);
-    if (!found) {
-      setClientError("Bu ID raqamga mos mijoz topilmadi");
-      setClientName(""); setClientPhone(""); return;
+
+    // 1) Asosiy manba — server: mijozning clientCode maydoni bo'yicha to'g'ridan-to'g'ri.
+    let client: any = clients.find(c => (c.clientCode || "").toUpperCase().trim() === norm);
+
+    // 2) Zaxira — localStorage keshi (crm_client_ids): kod → clientId → mijoz.
+    if (!client) {
+      const found = Object.entries(storedIds).find(([, v]) => v === norm);
+      if (found) {
+        const id = found[0];
+        client = clients.find(c => c.id === id) || state.clients.find(c => c.id === id);
+      }
     }
-    const client = state.clients.find(c => c.id === found[0]);
-    if (!client) { setClientError("Mijoz ma'lumotlari yuklanmagan"); return; }
+
+    if (!client) {
+      // Mijozlar hali yuklanayotgan bo'lsa — foydalanuvchini yo'naltiramiz.
+      setClientError(
+        clientsLoading
+          ? "Mijozlar yuklanmoqda, bir soniyadan so'ng qayta urinib ko'ring"
+          : "Bu ID raqamga mos mijoz topilmadi",
+      );
+      setClientName(""); setClientPhone("");
+      return;
+    }
+
     setClientName(client.name || "");
     setClientPhone(client.phone || "");
     if (!selectedEmployeeId) {
-      const empNote = client.notes?.find(n => n.authorRole === "employee");
+      const empNote = client.notes?.find((n: any) => n.authorRole === "employee");
       if (empNote) setAssignedEmployee(empNote.authorName);
     }
   };

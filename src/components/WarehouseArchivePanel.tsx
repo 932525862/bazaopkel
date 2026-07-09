@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import {
   ChevronLeft, ChevronDown, ChevronUp, Search, Pencil, Check, X as XIcon, Lock,
   ArrowDownCircle, ArrowUpCircle, Truck, CheckSquare, Building2,
-  IdCard, Trash2, Share2, Archive as ArchiveIcon,
+  IdCard, Trash2, Share2, Archive as ArchiveIcon, Download,
 } from "lucide-react";
 import { toast } from "sonner";
 import { API } from "@/lib/api/client";
@@ -12,6 +12,7 @@ import {
   type Warehouse,
   type WarehouseArchiveEntry,
 } from "@/lib/warehouse";
+import { exportWarehouseKirim, exportWarehouseChiqim } from "@/lib/warehouse-excel";
 
 /**
  * OMBOR ARXIVI PANELI — o'chirib bo'lmaydigan tarix.
@@ -198,6 +199,26 @@ export function WarehouseArchivePanel({ warehouse, onClose }: Props) {
     } catch { return iso; }
   };
 
+  const handleExportKirim = () => {
+    try {
+      const n = exportWarehouseKirim(warehouse.name, entries);
+      if (n === 0) toast.info("Kirim yozuvlari topilmadi");
+      else toast.success(`Kirim Excel yuklab olindi (${n} ta yozuv)`);
+    } catch (err: any) {
+      toast.error(err?.message || "Excel yaratishda xatolik");
+    }
+  };
+
+  const handleExportChiqim = () => {
+    try {
+      const n = exportWarehouseChiqim(warehouse.name, entries);
+      if (n === 0) toast.info("Chiqim yozuvlari topilmadi");
+      else toast.success(`Chiqim Excel yuklab olindi (${n} ta yozuv)`);
+    } catch (err: any) {
+      toast.error(err?.message || "Excel yaratishda xatolik");
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-[70] bg-[#F5F6FA] flex flex-col">
       {/* Header */}
@@ -245,6 +266,24 @@ export function WarehouseArchivePanel({ warehouse, onClose }: Props) {
               {f.label}
             </button>
           ))}
+        </div>
+
+        {/* Excel yuklab olish — kirim va chiqim alohida */}
+        <div className="flex gap-2">
+          <button
+            onClick={handleExportKirim}
+            disabled={loading}
+            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-black border border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100 disabled:opacity-50 transition-colors"
+          >
+            <Download className="w-3.5 h-3.5" /> Kirim — Excel
+          </button>
+          <button
+            onClick={handleExportChiqim}
+            disabled={loading}
+            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-black border border-amber-200 bg-amber-50 text-amber-600 hover:bg-amber-100 disabled:opacity-50 transition-colors"
+          >
+            <Download className="w-3.5 h-3.5" /> Chiqim — Excel
+          </button>
         </div>
       </div>
 

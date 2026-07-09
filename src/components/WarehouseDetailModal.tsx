@@ -143,6 +143,61 @@ function clampToMax(val: string, max: number): string {
   return val;
 }
 
+// ── Qisman (yoki to'liq) chiqim ulushini YAGONA joyda hisoblovchi funksiya ──
+// MUHIM: dona (tovar soni) — BUTUN son bo'lishi shart, chunki mahsulotni bo'lib
+// (0.66 dona) chiqim qilib bo'lmaydi. Shu sabab avval butun dona aniqlanadi,
+// keyin qolgan barcha o'lchovlar (joy, hajm, brutto) shu donaga PROPORSIONAL
+// hosil qilinadi. Natijada hisob-kitob doim izchil bo'ladi.
+//   availableRatio — shu omborda hozir mavjud ulush (0..1)
+//   partial        — { qty, unit } berilsa "Bir qismi", null bo'lsa "Barchasi"
+export interface TakeBreakdown {
+  ratio: number;   // to'liq mahsulotga nisbatan real olingan ulush (0..1)
+  qty: number;     // dona — BUTUN son
+  places: number;  // joy
+  volume: number;  // m³
+  brutto: number;  // kg
+}
+
+export function computeTake(
+  p: KirimProduct,
+  availableRatio: number,
+  partial?: { qty?: string; unit?: string } | null,
+): TakeBreakdown {
+  const fullQty    = parseFloat(p.quantity) || 0;
+  const fullPlaces = p.places.reduce((s, pl) => s + (parseFloat(pl.count) || 0), 0);
+  const fullVolume = parseFloat(p.totalVolume || "0") || 0;
+  const fullBrutto = bruttoKg(p);
+
+  const avail = Math.max(0, Math.min(1, availableRatio));
+
+  // 1) Kiritilgan asos (joy/soni/brutto/hajm) bo'yicha xom ulush — to'liq mahsulotga nisbatan.
+  let ratio = avail; // "Barchasi" — mavjud qismini to'liq olish
+  if (partial) {
+    const entered = parseFloat(partial.qty || "0");
+    const availBasis = productBasisTotal(p, partial.unit ?? "joy") * avail;
+    ratio = entered > 0 && availBasis > 0 ? avail * Math.min(1, entered / availBasis) : 0;
+  }
+
+  // 2) Dona butun songa yaxlitlanadi (mavjud butun zaxiradan oshmaydi),
+  //    so'ng effektiv ulush shu butun donadan qayta hisoblanadi.
+  let effRatio = ratio;
+  let qty = fullQty * ratio;
+  if (fullQty > 0) {
+    const availPieces = Math.round(fullQty * avail);
+    const pieces = Math.max(0, Math.min(availPieces, Math.round(fullQty * ratio)));
+    qty = pieces;
+    effRatio = pieces / fullQty;
+  }
+
+  return {
+    ratio: effRatio,
+    qty,
+    places: fullPlaces * effRatio,
+    volume: fullVolume * effRatio,
+    brutto: fullBrutto * effRatio,
+  };
+}
+
 // ── Ombor statistikasi panellari (Kirim va Chiqim ikkala bo'limda ham ko'rinadi) ──
 interface ChinaStatsData {
   totalProducts: number; dispatchedProducts: number; remainingProducts: number;
@@ -705,22 +760,15 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
       const fullJoys = product.places.reduce((s, pl) => s + (parseFloat(pl.count) || 0), 0) || 1;
       const alreadyDispatched = (kirimRecord.dispatchedPlaces ?? {})[pid] ?? 0;
       const remainingJoys = Math.max(0, fullJoys - alreadyDispatched);
-      let ratio = 1; // ratio of remainingJoys to take
-      if (mode === "partial") {
-        const inp = partialInputs[pid];
-        const entered = parseFloat(inp?.qty || "0");
-        const fullBasis = productBasisTotal(product, inp?.unit ?? "joy");
-        const remainingBasis = fullJoys > 0 ? fullBasis * (remainingJoys / fullJoys) : fullBasis;
-        ratio = entered > 0 && remainingBasis > 0 ? Math.min(1, entered / remainingBasis) : 0;
-      }
-      const remainingRatio = remainingJoys / fullJoys;
-      totalQty    += (parseFloat(product.quantity)    || 0) * remainingRatio * ratio;
-      totalPlaces += remainingJoys * ratio;
-      totalVolume += (parseFloat(product.totalVolume) || 0) * remainingRatio * ratio;
-      totalBrutto += bruttoKg(product) * remainingRatio * ratio;
+      const availableRatio = fullJoys > 0 ? remainingJoys / fullJoys : 1;
+      const t = computeTake(product, availableRatio, mode === "partial" ? partialInputs[pid] : null);
+      totalQty    += t.qty;      // dona — butun
+      totalPlaces += t.places;
+      totalVolume += t.volume;
+      totalBrutto += t.brutto;
     }
     return {
-      qty:    Math.round(totalQty    * 100) / 100,
+      qty:    Math.round(totalQty),                 // dona — butun son
       places: Math.round(totalPlaces * 100) / 100,
       volume: Math.round(totalVolume * 1000) / 1000,
       brutto: Math.round(totalBrutto * 100) / 100,
@@ -941,12 +989,17 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
   // ── Qabul qilingan tovar kartasi — yaratuvchi ombordagi kabi TO'LIQ info.
   // Har bir qabul qiluvchi ombor "Kirim" bo'limida tovar tugaguncha turadi. ──
   const renderStockProductCard = (
-    item: { pid: string; product: KirimProduct; source: ChiqimRecord; available: number },
+    item: { pid: string; product: KirimProduct; source: ChiqimRecord; available: number; incoming?: number },
     idx: number,
     accent: "blue" | "violet" = "blue",
   ) => {
     const { pid, product: p, source, available } = item;
+    const incoming = item.incoming ?? 1;                       // omborga real kelgan ulush
+    const dispatchedShare = Math.max(0, incoming - available); // shu ombordan chiqib ketgan ulush
+    const hasDispatched = dispatchedShare > 0.0005;
     const totalJoys = p.places.reduce((s2, pl) => s2 + (parseFloat(pl.count) || 0), 0);
+    const fullQty = parseFloat(p.quantity) || 0;
+    const fullVol = parseFloat(p.totalVolume || "0") || 0;
     const isPartial = available < 0.9995;
     const chip = accent === "violet" ? "text-violet-600 bg-violet-50" : "text-[#005AB5] bg-[#EFF6FF]";
     return (
@@ -984,9 +1037,14 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
           <p className="text-[10px] text-muted-foreground/60">
             Kelgan sana: {String(source.date).slice(0, 10)} · Mijoz: {source.clientName || source.clientCode}
           </p>
-          {isPartial && (
+          {hasDispatched && (
+            <p className="text-[10px] font-bold text-red-600 bg-red-50 border border-red-100 rounded-md px-2 py-1">
+              Chiqib ketgan: {Math.round(fullQty * dispatchedShare)} dona · {fmt2(totalJoys * dispatchedShare)} joy · {fmt2(bruttoKg(p) * dispatchedShare)} kg · {fmt3(fullVol * dispatchedShare)} m³
+            </p>
+          )}
+          {(isPartial || hasDispatched) && (
             <p className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-md px-2 py-1">
-              Omborda qolgan: {fmt2((parseFloat(p.quantity) || 0) * available)} dona · {fmt2(totalJoys * available)} joy · {fmt2(bruttoKg(p) * available)} kg · {fmt3((parseFloat(p.totalVolume || "0") || 0) * available)} m³
+              Omborda qolgan: {Math.round(fullQty * available)} dona · {fmt2(totalJoys * available)} joy · {fmt2(bruttoKg(p) * available)} kg · {fmt3(fullVol * available)} m³
             </p>
           )}
         </div>
@@ -1371,10 +1429,10 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
           const incoming = (cr.productRatios?.[pid] ?? 1) * acceptedShare; // omborga real kelgan ulush
           const gone = ortaDispatchedRatios[pid] ?? 0;
           const available = Math.max(0, incoming - gone);
-          return { pid, product: globalProductMap[pid], source: cr, available };
+          return { pid, product: globalProductMap[pid], source: cr, available, incoming };
         })
         .filter(x => x.available > 0.0005);
-    }).filter((x): x is { pid: string; product: KirimProduct; source: ChiqimRecord; available: number } => !!x.product);
+    }).filter((x): x is { pid: string; product: KirimProduct; source: ChiqimRecord; available: number; incoming: number } => !!x.product);
   }, [receivedInWarehouseList, ortaDispatchedRatios, globalProductMap, ownReceivedRatios]);
 
   const ortaSelectedIds = useMemo(
@@ -1386,20 +1444,14 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
     let qty = 0, places = 0, volume = 0, weight = 0;
     for (const { pid, product: p, available } of ortaSelectedIds) {
       const mode = productModes[pid] ?? "full";
-      let take = available; // "Barchasi" — mavjud qismini to'liq olish
-      if (mode === "partial") {
-        const inp = partialInputs[pid];
-        const entered = parseFloat(inp?.qty || "0");
-        const availBasis = productBasisTotal(p, inp?.unit ?? "joy") * available;
-        take = entered > 0 && availBasis > 0 ? available * Math.min(1, entered / availBasis) : 0;
-      }
-      qty    += (parseFloat(p.quantity) || 0) * take;
-      places += p.places.reduce((s, pl) => s + (parseFloat(pl.count) || 0), 0) * take;
-      volume += (parseFloat(p.totalVolume || "0") || 0) * take;
-      weight += bruttoKg(p) * take;
+      const t = computeTake(p, available, mode === "partial" ? partialInputs[pid] : null);
+      qty    += t.qty;      // dona — butun
+      places += t.places;
+      volume += t.volume;
+      weight += t.brutto;
     }
     return {
-      qty:    Math.round(qty    * 100) / 100,
+      qty:    Math.round(qty),                    // dona — butun son
       places: Math.round(places * 100) / 100,
       volume: Math.round(volume * 1000) / 1000,
       weight: Math.round(weight * 100) / 100,
@@ -1536,19 +1588,20 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
           const alreadyDispatched = (kr?.dispatchedPlaces ?? {})[pid] ?? 0;
           const remainingJoys = Math.max(0, totalJoys - alreadyDispatched);
           const mode = productModes[pid] ?? "full";
+          const availableRatio = totalJoys > 0 ? remainingJoys / totalJoys : 1;
 
+          // Ekranda ko'rsatilgan hisob bilan bir xil bo'lishi uchun aynan
+          // computeTake ishlatiladi (dona butun → effektiv ulush shundan).
+          let effRatio = availableRatio;
           let joysTaken = remainingJoys;
           if (mode === "partial") {
-            const inp = partialInputs[pid];
-            const entered = parseFloat(inp?.qty || "0");
-            const fullBasis = productBasisTotal(product, inp?.unit ?? "joy");
-            const remainingBasis = totalJoys > 0 ? fullBasis * (remainingJoys / totalJoys) : fullBasis;
-            const takenRatio = remainingBasis > 0 ? Math.min(1, entered / remainingBasis) : 1;
-            joysTaken = Math.round(takenRatio * remainingJoys * 100) / 100;
+            const t = computeTake(product, availableRatio, partialInputs[pid]);
+            effRatio = t.ratio;
+            joysTaken = Math.round(totalJoys * effRatio * 100) / 100;
           }
 
           productRatios[pid] = totalJoys > 0
-            ? Math.round((joysTaken / totalJoys) * 10000) / 10000
+            ? Math.round(effRatio * 10000) / 10000
             : 1;
 
           if (joysTaken >= remainingJoys - 0.005) {
@@ -1618,13 +1671,8 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
       const groups: Record<string, { productIds: string[]; ratios: Record<string, number>; source: ChiqimRecord }> = {};
       for (const { pid, product, source, available } of ortaSelectedIds) {
         const mode = productModes[pid] ?? "full";
-        let take = available;
-        if (mode === "partial") {
-          const inp = partialInputs[pid];
-          const entered = parseFloat(inp?.qty || "0");
-          const availBasis = productBasisTotal(product, inp?.unit ?? "joy") * available;
-          take = availBasis > 0 ? available * Math.min(1, entered / availBasis) : available;
-        }
+        // Ekrandagi hisob bilan bir xil: computeTake (dona butun → effektiv ulush)
+        const take = computeTake(product, available, mode === "partial" ? partialInputs[pid] : null).ratio;
         if (take <= 0.0005) continue;
         const rid = source.kirimRecordId;
         if (!groups[rid]) groups[rid] = { productIds: [], ratios: {}, source };
@@ -3113,7 +3161,10 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
                                       <span className="text-[10px] text-[#6B7280]">Soni: <strong>{p.quantity}</strong></span>
                                     )}
                                     {totalJoys > 0 && (
-                                      <span className="text-[10px] text-[#6B7280]">Joy: <strong>{totalJoys}</strong></span>
+                                      <span className="text-[10px] text-[#6B7280]">Joy: <strong>{fmt2(totalJoys)}</strong></span>
+                                    )}
+                                    {p.brutto && (
+                                      <span className="text-[10px] text-[#6B7280]">Vazn: <strong>{p.brutto} {p.bruttoUnit}</strong></span>
                                     )}
                                     {p.totalVolume && (
                                       <span className="text-[10px] text-[#6B7280]">Vol: <strong>{p.totalVolume} m³</strong></span>
@@ -4629,7 +4680,7 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
                                   <span className="text-[10px] text-muted-foreground/60">{kr.date}</span>
                                   {isPartiallyDispatched && (
                                     <span className="text-[10px] font-bold text-amber-600 bg-amber-600/10 px-1.5 py-0.5 rounded">
-                                      {alreadyDispatched}/{totalJoys} joy chiqarilgan
+                                      {fmt2(alreadyDispatched)}/{fmt2(totalJoys)} joy chiqarilgan
                                     </span>
                                   )}
                                 </div>
@@ -4640,8 +4691,11 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
                                   )}
                                   {totalJoys > 0 && (
                                     <span className="text-[10px] text-muted-foreground">
-                                      Joy: <strong className={remainingJoys < totalJoys ? "text-amber-600" : ""}>{remainingJoys} ta qolgan</strong>
+                                      Joy: <strong className={remainingJoys < totalJoys ? "text-amber-600" : ""}>{fmt2(remainingJoys)} ta qolgan</strong>
                                     </span>
+                                  )}
+                                  {p.brutto && (
+                                    <span className="text-[10px] text-muted-foreground">Vazn: <strong>{p.brutto} {p.bruttoUnit}</strong></span>
                                   )}
                                   {p.totalVolume && (
                                     <span className="text-[10px] text-muted-foreground">Vol: <strong>{p.totalVolume} m³</strong></span>
@@ -4708,6 +4762,20 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
                                       >
                                         {PARTIAL_BASES.map(b => <option key={b.key} value={b.key}>{b.label}</option>)}
                                       </select>
+                                    </div>
+                                  );
+                                })()}
+                                {/* Tanlangan tovardan aynan qancha olinishi — vazn (kg) bilan to'liq */}
+                                {(() => {
+                                  const availableRatio = totalJoys > 0 ? remainingJoys / totalJoys : 1;
+                                  const t = computeTake(p, availableRatio, mode === "partial" ? partial : null);
+                                  return (
+                                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-blue-600/5 border border-blue-600/10 px-2.5 py-1.5">
+                                      <span className="text-[10px] font-black text-blue-700">Olinadi:</span>
+                                      <span className="text-[10px] text-muted-foreground">Soni: <strong className="text-foreground">{t.qty} dona</strong></span>
+                                      <span className="text-[10px] text-muted-foreground">Joy: <strong className="text-foreground">{fmt2(t.places)}</strong></span>
+                                      <span className="text-[10px] text-muted-foreground">Brutto: <strong className="text-foreground">{fmt2(t.brutto)} kg</strong></span>
+                                      <span className="text-[10px] text-muted-foreground">Hajm: <strong className="text-foreground">{fmt3(t.volume)} m³</strong></span>
                                     </div>
                                   );
                                 })()}
@@ -5075,7 +5143,10 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
                                     <span className="text-[10px] text-muted-foreground">Soni: <strong>{p.quantity}</strong></span>
                                   )}
                                   {totalJoys > 0 && (
-                                    <span className="text-[10px] text-muted-foreground">Joy: <strong>{totalJoys}</strong></span>
+                                    <span className="text-[10px] text-muted-foreground">Joy: <strong>{fmt2(totalJoys)}</strong></span>
+                                  )}
+                                  {p.brutto && (
+                                    <span className="text-[10px] text-muted-foreground">Vazn: <strong>{p.brutto} {p.bruttoUnit}</strong></span>
                                   )}
                                   {p.totalVolume && (
                                     <span className="text-[10px] text-muted-foreground">Vol: <strong>{p.totalVolume} m³</strong></span>
