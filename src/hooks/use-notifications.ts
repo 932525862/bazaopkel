@@ -14,6 +14,35 @@ function notifyListeners() {
   listeners.forEach((l) => l());
 }
 
+/** Serverdagi holat bilan sinxronlaydi. Socket uzilib turgan paytda kelgan
+ *  bildirishnomalarni qoplash uchun ishlatiladi (qayta ulanishda va zaxira
+ *  polling'da). Yangi o'qilmagan bildirishnoma paydo bo'lgan bo'lsa —
+ *  xuddi real-vaqt kelgandek ovoz + toast ko'rsatadi. */
+async function syncFromServer(alertOnNew: boolean) {
+  try {
+    const prevCount = globalUnreadCount;
+    const prevTopId = globalNotifications[0]?.id;
+    const [{ count }, data] = await Promise.all([
+      API.unreadNotificationCount(),
+      API.notifications(1, 20),
+    ]);
+    globalUnreadCount = count;
+    // Foydalanuvchi 2+-sahifani ko'rayotgan bo'lsa, ro'yxatini buzmaymiz —
+    // faqat badge yangilanadi.
+    if (globalCurrentPage === 1) {
+      globalNotifications = data.items;
+      globalTotalPages = data.totalPages;
+    }
+    if (alertOnNew && count > prevCount) {
+      const latestUnread = data.items.find((n: any) => !n.isRead && n.id !== prevTopId);
+      notify.info(latestUnread?.message || "Yangi bildirishnoma keldi");
+    }
+    notifyListeners();
+  } catch (err) {
+    console.error("Failed to sync notifications", err);
+  }
+}
+
 const globalNotificationHandler = (event: string, data: any) => {
   if (event === "notification") {
     // Prevent duplicates
@@ -25,7 +54,25 @@ const globalNotificationHandler = (event: string, data: any) => {
       notifyListeners();
     }
   }
+  // Socket qayta ulandi — uzilish davomida o'tkazib yuborilganlarni qoplaymiz
+  if (event === "reconnected") {
+    void syncFromServer(true);
+  }
 };
+
+// ZAXIRA MEXANIZM: socket qandaydir sabab bilan uzilib turgan bo'lsa ham,
+// bildirishnomalar 30 soniyada bir REST orqali kelib turadi (ovoz bilan).
+// Socket tirik payt hech narsa qilmaydi — ortiqcha yuk yo'q.
+let fallbackPollStarted = false;
+function startFallbackPolling() {
+  if (fallbackPollStarted || typeof window === "undefined") return;
+  fallbackPollStarted = true;
+  setInterval(() => {
+    if (!API.isSocketConnected()) {
+      void syncFromServer(true);
+    }
+  }, 30_000);
+}
 
 export function useNotifications() {
   const [state, setState] = useState({
@@ -93,6 +140,7 @@ export function useNotifications() {
   // Subscribe to real-time notifications globally once
   useEffect(() => {
     API.initSocket(globalNotificationHandler);
+    startFallbackPolling();
     // Note: We don't return the cleanup here because we want this dedicated 
     // global handler to persist throughout the app lifecycle.
     // API.initSocket uses a Set, so adding the same reference multiple times is safe.

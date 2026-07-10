@@ -1500,8 +1500,14 @@ export function ClientDetailDialog({
             setCallReminder(time);
             handleCompleteCall("talked");
           }}
+          // Qayta bog'lanish taski IXTIYORIY: mijoz "ishlamayman" degan bo'lsa,
+          // task qo'ymasdan ham yakunlash mumkin. Modal ochiq payt chaqirilgani
+          // uchun handleCompleteCall'dagi guard to'xtatmaydi, callReminder bo'sh —
+          // remindAt yuborilmaydi, task yaratilmaydi.
+          onSkip={() => handleCompleteCall("talked")}
+          skipLabel="Task qo'ymasdan yakunlash"
           title="Keyingi aloqa"
-          description="Mijoz bilan yana qachon bog'lanishni rejalashtiramiz?"
+          description="Mijoz bilan yana qachon bog'lanishni rejalashtiramiz? (ixtiyoriy)"
           loading={loading}
         />
       )}

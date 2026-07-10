@@ -9,16 +9,23 @@ interface Props {
   title?: string;
   description?: string;
   confirmLabel?: string;
+  /** Ixtiyoriy: berilsa, eslatma (task) qo'ymasdan ham yakunlash tugmasi chiqadi.
+   *  Masalan "Gaplashildi"da mijoz "ishlamayman" desa, qayta bog'lanish taski
+   *  qo'yish mantiqsiz — shu tugma bilan tasksiz yakunlanadi. */
+  onSkip?: () => void;
+  skipLabel?: string;
 }
 
-export function ReminderModal({ 
-  isOpen, 
-  onClose, 
-  onConfirm, 
+export function ReminderModal({
+  isOpen,
+  onClose,
+  onConfirm,
   loading,
   title = "Qayta qo'ng'iroq qilish",
   description = "Keyingi safar qachon bog'lanish kerak?",
-  confirmLabel = "Saqlash va yakunlash"
+  confirmLabel = "Saqlash va yakunlash",
+  onSkip,
+  skipLabel = "Task qo'ymasdan yakunlash"
 }: Props) {
   const [callReminder, setCallReminder] = useState("");
 
@@ -53,6 +60,15 @@ export function ReminderModal({
             >
               {confirmLabel}
             </button>
+            {onSkip && (
+              <button
+                onClick={onSkip}
+                disabled={loading}
+                className="w-full py-3 rounded-xl text-sm font-bold border border-border text-foreground hover:bg-secondary transition-all disabled:opacity-50"
+              >
+                {skipLabel}
+              </button>
+            )}
             <button
               onClick={onClose}
               className="w-full py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"

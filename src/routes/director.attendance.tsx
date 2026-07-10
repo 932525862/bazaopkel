@@ -158,7 +158,8 @@ function DirectorAttendance() {
     fetchAttendance();
 
     const unsub = API.initSocket((ev) => {
-      if (ev === "attendanceCheckedIn" || ev === "attendanceCheckedOut") {
+      // "reconnected" — socket qayta ulanganda o'tkazib yuborilganlarni qoplash
+      if (ev === "attendanceCheckedIn" || ev === "attendanceCheckedOut" || ev === "reconnected") {
         fetchAttendance();
       }
     });

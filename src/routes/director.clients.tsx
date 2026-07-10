@@ -207,6 +207,8 @@ function DirectorClients() {
         }));
       }
       if (event === "clientUpdated") fetchAll();
+      // Socket qayta ulandi — uzilish davomida kelgan lidlar/o'zgarishlarni qoplaymiz
+      if (event === "reconnected") fetchAll();
       if (event === "clientReminder") {
         playNotificationSound();
         showBrowserNotification("Qayta qo'ng'iroq", {
@@ -227,6 +229,15 @@ function DirectorClients() {
       }
     });
     return () => unsub();
+  }, []);
+
+  // ZAXIRA: socket qandaydir sabab bilan uzilib turgan bo'lsa ham, lidlar
+  // ro'yxati 30 soniyada bir yangilanib turadi. Socket tirik payt ishlamaydi.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (!API.isSocketConnected()) fetchAll();
+    }, 30_000);
+    return () => clearInterval(id);
   }, []);
 
   // Reminder Logic (Cleaned up local polling as backend Cron handles it now)

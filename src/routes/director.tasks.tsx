@@ -85,6 +85,8 @@ function DirectorTasks() {
 
     const unsub = API.initSocket((event, data) => {
       console.log("WS Event in DirectorTasks:", event, data);
+      // Socket qayta ulandi — uzilish davomida o'tkazib yuborilganlarni qoplaymiz
+      if (event === "reconnected") fetchTasks();
       if (event === "taskCreated" || event === "taskStatusChanged" || event === "taskVerified" || event === "taskIncomplete" || event === "taskRejected") {
         fetchTasks();
         

@@ -67,7 +67,7 @@ function LoginPage() {
             <img className="w-12 h-12" src={logo} alt="Logo" />
           </div>
           <h1 className="text-2xl font-bold text-center text-foreground">
-           Tourland CRM tizimiga xush kelibsiz
+           Obkelogist CRM tizimiga xush kelibsiz
           </h1>
           <p className="text-center text-sm text-muted-foreground mt-1 mb-6">
             Rolingizni tanlang va tizimga kiring

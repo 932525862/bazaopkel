@@ -22,14 +22,27 @@ function connectSocket(): Socket {
     // access token eskirgach, socket.io reconnect abadiy o'sha ESKI token bilan
     // urinaverar va server har safar rad etar edi — bildirishnomalar jimgina o'lardi.
     auth: (cb) => cb({ token: getToken() }),
-    transports: ["websocket"],
+    // Avval websocket (tez), ishlamasa long-polling'ga tushadi — ba'zi
+    // proxy/CDN'lar (masalan noto'g'ri sozlangan nginx/Cloudflare) websocket
+    // upgrade'ni bloklaganda ham real-vaqt bildirishnomalar ishlashda davom etadi.
+    transports: ["websocket", "polling"],
+    tryAllTransports: true,
   });
 
   const notify = (ev: string, data: any) => {
     listeners.forEach(l => l(ev, data));
   };
 
-  s.on("connect", () => console.log("WS connected"));
+  // Qayta ulanishni aniqlash: uzilish davomida serverdan kelgan eventlar
+  // (yangi lid, o'zgarish, bildirishnoma) YO'QOLGAN bo'ladi. Shuning uchun
+  // har qayta ulanishda sahifalarga sintetik "reconnected" eventi tarqatiladi —
+  // ular ma'lumotni serverdan qayta tortib, o'tkazib yuborilganini qoplaydi.
+  let hadConnection = false;
+  s.on("connect", () => {
+    console.log("WS connected");
+    if (hadConnection) notify("reconnected", null);
+    hadConnection = true;
+  });
   s.on("notification", (data) => notify("notification", data));
   s.on("taskCreated", (data) => notify("taskCreated", data));
   s.on("taskStatusChanged", (data) => notify("taskStatusChanged", data));
@@ -552,6 +565,8 @@ export const API = {
     else if (!socket.connected) socket.connect();
     return () => { listeners.delete(onEvent); };
   },
+  /** Real-vaqt ulanish hozir tirikmi — zaxira polling shunga qarab ishlaydi. */
+  isSocketConnected: () => !!socket?.connected,
   disconnectSocket: () => {
     closeSocket();
   }

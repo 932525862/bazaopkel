@@ -81,7 +81,7 @@ function PublicForm() {
           <div className="w-16 h-16 rounded-full bg-success/15 flex items-center justify-center text-success mx-auto mb-4">
             <CheckCircle2 className="w-8 h-8" />
           </div>
-          <h1 className="text-2xl text-[#04df3b] font-bold ">TOURLAND.UZ</h1>
+          <h1 className="text-2xl text-[#04df3b] font-bold ">OBKELOGIST</h1>
            <h1 className="text-2xl font-bold text-foreground">Rahmat!</h1>
           <p className="text-muted-foreground mt-2">Ma'lumotlaringiz qabul qilindi. Tez orada siz bilan bog'lanamiz.</p>
         </div>
