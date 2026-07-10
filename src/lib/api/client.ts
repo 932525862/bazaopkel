@@ -7,6 +7,53 @@ const TOKEN_KEY = "agency_crm_token";
 let socket: Socket | null = null;
 const listeners = new Set<(event: string, data: any) => void>();
 
+function closeSocket() {
+  if (socket) {
+    socket.disconnect();
+    socket = null;
+  }
+}
+
+function connectSocket(): Socket {
+  const token = getToken();
+  const url = API_URL || (typeof window !== "undefined" ? window.location.origin : "");
+  const s = io(url, {
+    auth: { token },
+    transports: ["websocket"],
+  });
+
+  const notify = (ev: string, data: any) => {
+    listeners.forEach(l => l(ev, data));
+  };
+
+  s.on("connect", () => console.log("WS connected"));
+  s.on("notification", (data) => notify("notification", data));
+  s.on("taskCreated", (data) => notify("taskCreated", data));
+  s.on("taskStatusChanged", (data) => notify("taskStatusChanged", data));
+  s.on("taskVerified", (data) => notify("taskVerified", data));
+  s.on("taskIncomplete", (data) => notify("taskIncomplete", data));
+  s.on("taskRejected", (data) => notify("taskRejected", data));
+  s.on("attendanceCheckedIn", (data) => notify("attendanceCheckedIn", data));
+  s.on("attendanceCheckedOut", (data) => notify("attendanceCheckedOut", data));
+  s.on("userUpdated", (data) => notify("userUpdated", data));
+  s.on("clientCallStarted", (data) => notify("clientCallStarted", data));
+  s.on("clientCallEnded", (data) => notify("clientCallEnded", data));
+  s.on("clientUpdated", (data) => notify("clientUpdated", data));
+  s.on("clientReminder", (data) => notify("clientReminder", data));
+  s.on("paymentReminder", (data) => notify("paymentReminder", data));
+
+  return s;
+}
+
+/** Access token yangilanganda (refresh) ochiq socket ulanishini yangi token bilan
+ *  qayta o'rnatadi — aks holda 15 daqiqadan keyin real-vaqt bildirishnomalar
+ *  jim tarzda to'xtab qoladi (eski token bilan qayta-qayta ulanishga urinaveradi). */
+function reconnectSocketWithFreshToken() {
+  if (!socket) return;
+  socket.disconnect();
+  socket = connectSocket();
+}
+
 export function apiBase() {
   return API_URL ? `${API_URL}/api` : "/api";
 }
@@ -39,6 +86,12 @@ export function setRefreshToken(t: string | null) {
   else localStorage.removeItem(REFRESH_TOKEN_KEY);
 }
 
+/** Joriy foydalanuvchining real-vaqt ulanishini uzadi — logout paytida chaqiriladi,
+ *  aks holda keyingi login xuddi shu (eski) ulanishni qayta ishlatib yuborishi mumkin. */
+export function disconnectSocket() {
+  closeSocket();
+}
+
 let isRefreshing = false;
 let refreshQueue: Array<() => void> = [];
 
@@ -54,6 +107,7 @@ async function refreshTokens() {
   const data = await res.json();
   setToken(data.accessToken);
   setRefreshToken(data.refreshToken);
+  reconnectSocketWithFreshToken();
   return data;
 }
 
@@ -88,6 +142,7 @@ export async function api<T = unknown>(
         refreshQueue = [];
         setToken(null);
         setRefreshToken(null);
+        closeSocket();
         if (typeof window !== "undefined") {
           window.location.href = "/login";
         }
@@ -137,16 +192,6 @@ export const API = {
       canAccessForms: user.canAccessForms !== undefined ? !!user.canAccessForms : true,
     }
   }),
-  getMyEmployees: () => api<any[]>("/users/me/employees").then(list => list.map(u => ({
-    id: u.id,
-    firstName: u.firstName,
-    lastName: u.lastName,
-    phone: u.phoneNumber,
-    login: u.phoneNumber,
-    password: "",
-    isActive: u.isActive,
-    createdAt: u.createdAt,
-  }))),
   updateProfile: (data: { firstName?: string; lastName?: string; phoneNumber?: string }) =>
     api<any>("/users/profile", {
       method: "PATCH",
@@ -157,7 +202,9 @@ export const API = {
   activateUser: (id: string) => api(`/users/${id}/activate`, { method: "POST" }),
   deactivateUser: (id: string) => api(`/users/${id}/deactivate`, { method: "POST" }),
 
-  // Forgot password / pincode
+  // Forgot password / OTP (Telegram orqali yuboriladi)
+  requestPasswordReset: (phoneNumber: string) =>
+    api<{ message: string }>("/auth/forgot-password/request", { method: "POST", json: { phoneNumber: cleanPhone(phoneNumber) } }),
   verifyPincode: (phoneNumber: string, pincode: string) =>
     api<{ valid: boolean }>("/auth/verify-pincode", { method: "POST", json: { phoneNumber: cleanPhone(phoneNumber), pincode } }),
   resetPassword: (phoneNumber: string, pincode: string, newPassword: string) =>
@@ -319,7 +366,6 @@ export const API = {
   }),
   deleteClient: (id: string) => api(`/clients/${id}`, { method: "DELETE" }),
   callStart: (id: string) => api(`/clients/${id}/call/start`, { method: "POST" }),
-  callEnd: (id: string, remindAt?: string) => Promise.resolve(), // Not supported in current CRM backend unless done via updateClient
   addNote: (id: string, text: string) => api(`/clients/${id}/notes`, { method: "POST", json: { text } }),
   addPayment: (id: string, amount: number) => api(`/clients/${id}/payments`, { method: "POST", json: { amount } }),
   deletePayment: (id: string) => api(`/clients/payments/${id}`, { method: "DELETE" }),
@@ -327,16 +373,6 @@ export const API = {
   warnClient: (id: string, remindAt: string) => api(`/clients/${id}/warn`, { method: "POST", json: { remindAt } }),
   // Keyingi tartibli mijoz kodini (OK/8...) serverda ATOMIK tarzda biriktiradi va yangilangan mijozni qaytaradi
   assignClientCode: (id: string) => api<any>(`/clients/${id}/assign-code`, { method: "POST" }),
-
-  uploadClientAttachments: (clientId: string, files: File[]) => {
-    const formData = new FormData();
-    files.forEach(f => formData.append("files", f));
-    return api<any[]>(`/clients/${clientId}/attachments`, {
-      method: "POST",
-      body: formData,
-      headers: {},
-    } as any);
-  },
 
   importExcel: (file: File, departmentId: string) => {
     const formData = new FormData();
@@ -437,24 +473,15 @@ export const API = {
   rejectTask: (id: string, reason?: string) => api(`/tasks/${id}/reject`, { method: "PATCH", json: { reason } }),
   taskDetail: (id: string) => api<any>(`/tasks/${id}`),
   templateInstances: (templateId: string) => api<any[]>(`/tasks/template/${templateId}/instances`),
-  taskSeen: (id: string) => Promise.resolve(), // TODO: Not supported in current CRM backend
-  deleteTask: (id: string) => Promise.resolve(), // TODO: Not supported in current CRM backend
 
   // archive (activity logs)
   directorArchive: () => api<any[]>("/archive/director"),
   employeeArchive: () => api<any[]>("/archive/employee"),
 
-  // stats - Not supported in current CRM backend
-  statsOverview: (employeeId?: string) => Promise.resolve({}),
-  statsSales: (employeeId?: string) => Promise.resolve([]),
-
-  // telegram - Not supported in current CRM backend
-  tgSubscribers: () => Promise.resolve([]),
-  tgSend: (chatId: number, text: string) => Promise.resolve(),
-
   // notifications
   notifications: (page: number = 1, limit: number = 20) =>
     api<{ items: any[], total: number, page: number, limit: number, totalPages: number }>(`/notifications?page=${page}&limit=${limit}`),
+  unreadNotificationCount: () => api<{ count: number }>("/notifications/unread-count"),
   markNotificationRead: (id: string) => api(`/notifications/${id}/read`, { method: "PATCH" }),
   markAllNotificationsRead: () => api("/notifications/read-all", { method: "POST" }),
   subscribePush: (subscription: any) => api("/notifications/push-subscribe", { method: "POST", json: subscription }),
@@ -479,42 +506,10 @@ export const API = {
   // WebSocket
   initSocket: (onEvent: (event: string, data: any) => void) => {
     listeners.add(onEvent);
-    if (socket) return () => { listeners.delete(onEvent); };
-
-    const token = getToken();
-    const url = API_URL || (typeof window !== "undefined" ? window.location.origin : "");
-    socket = io(url, {
-      auth: { token },
-      transports: ["websocket"]
-    });
-
-    const notify = (ev: string, data: any) => {
-      listeners.forEach(l => l(ev, data));
-    };
-
-    socket.on("connect", () => console.log("WS connected"));
-    socket.on("notification", (data) => notify("notification", data));
-    socket.on("taskCreated", (data) => notify("taskCreated", data));
-    socket.on("taskStatusChanged", (data) => notify("taskStatusChanged", data));
-    socket.on("taskVerified", (data) => notify("taskVerified", data));
-    socket.on("taskIncomplete", (data) => notify("taskIncomplete", data));
-    socket.on("attendanceCheckedIn", (data) => notify("attendanceCheckedIn", data));
-    socket.on("attendanceCheckedOut", (data) => notify("attendanceCheckedOut", data));
-    socket.on("userUpdated", (data) => notify("userUpdated", data));
-    socket.on("clientCallStarted", (data) => notify("clientCallStarted", data));
-    socket.on("clientCallEnded", (data) => notify("clientCallEnded", data));
-    socket.on("clientUpdated", (data) => notify("clientUpdated", data));
-    socket.on("clientReminder", (data) => notify("clientReminder", data));
-    socket.on("paymentReminder", (data) => notify("paymentReminder", data));
-
-    return () => {
-      listeners.delete(onEvent);
-    };
+    if (!socket) socket = connectSocket();
+    return () => { listeners.delete(onEvent); };
   },
   disconnectSocket: () => {
-    if (socket) {
-      socket.disconnect();
-      socket = null;
-    }
+    closeSocket();
   }
 };

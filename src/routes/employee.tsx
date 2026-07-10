@@ -4,7 +4,6 @@ import { CrmSidebar } from "@/components/CrmSidebar";
 import { MobileNav } from "@/components/MobileNav";
 import { useSession, saveSession, loadSession } from "@/lib/store";
 import { Users, Archive, User as UserIcon, ClipboardCheck, ListChecks, Layers, Bell, BarChart3, Package } from "lucide-react";
-import { useSocketEvent } from "@/lib/api/socket";
 import { API } from "@/lib/api/client";
 import { useNotifications } from "@/hooks/use-notifications";
 
@@ -41,7 +40,13 @@ function EmployeeLayout() {
     }
   };
 
-  useSocketEvent("userUpdated", fetchSessionSync);
+  useEffect(() => {
+    if (!session || session.role !== "employee") return;
+    const unsub = API.initSocket((event: string) => {
+      if (event === "userUpdated") fetchSessionSync();
+    });
+    return unsub;
+  }, [session?.id]);
 
   useEffect(() => {
     if (!session || session.role !== "employee") {

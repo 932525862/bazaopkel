@@ -124,3 +124,16 @@ export function formatUzTime(date: string | Date | number) {
   if (!d.isValid()) return "—";
   return d.format("HH:mm");
 }
+
+/**
+ * `<input type="datetime-local">` qiymati ("2026-07-10T14:30") hech qanday
+ * timezone axboroti bo'lmagan matn — `new Date(value)` uni QURILMANING
+ * (brauzer/OS) mahalliy vaqt zonasida deb talqin qiladi. Agar operator
+ * kompyuteri Toshkent vaqtiga sozlanmagan bo'lsa, natijada saqlangan
+ * eslatma/to'lov vaqti xato bo'lib qoladi. Bu funksiya xuddi shu matnni
+ * har doim Toshkent (UTC+5) vaqti sifatida talqin qilib, to'g'ri ISO
+ * satrga aylantiradi — qurilma vaqt zonasidan qat'i nazar.
+ */
+export function tashkentInputToIso(datetimeLocalValue: string): string {
+  return dayjs(datetimeLocalValue).utcOffset(300, true).toISOString();
+}

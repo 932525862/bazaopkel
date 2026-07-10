@@ -58,7 +58,6 @@ export function useNotifications() {
     try {
       const data = await API.notifications(page, limit);
       globalNotifications = data.items;
-      globalUnreadCount = data.items.filter((n) => !n.isRead).length; // This is actually not perfectly accurate for total unread if we have pages, but okay for current view
       globalTotalPages = data.totalPages;
       globalCurrentPage = data.page;
     } catch (err) {
@@ -69,13 +68,27 @@ export function useNotifications() {
     }
   }, []);
 
+  // Badge/bell doim serverdagi HAQIQIY (barcha sahifalar bo'yicha) o'qilmagan sonini
+  // ko'rsatishi kerak — sahifalangan ro'yxatning bitta sahifasidan hisoblash noto'g'ri
+  // bo'lib qolardi (masalan 2-sahifaga o'tilganda badge yolg'on pasayib ketardi).
+  const fetchUnreadCount = useCallback(async () => {
+    try {
+      const { count } = await API.unreadNotificationCount();
+      globalUnreadCount = count;
+      notifyListeners();
+    } catch (err) {
+      console.error("Failed to fetch unread notification count", err);
+    }
+  }, []);
+
   useEffect(() => {
     // Only fetch if empty or on mount once - actually fetchNotifications is called by components
     // and we also have a sync mechanism
     if (globalNotifications.length === 0 && !globalIsLoading) {
       fetchNotifications();
     }
-  }, [fetchNotifications]);
+    fetchUnreadCount();
+  }, [fetchNotifications, fetchUnreadCount]);
 
   // Subscribe to real-time notifications globally once
   useEffect(() => {

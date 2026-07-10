@@ -3,7 +3,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { Menu, X, LogOut, Briefcase, User, LayoutDashboard } from "lucide-react";
 import { Drawer } from "vaul";
 import { saveSession } from "@/lib/store";
-import { setToken } from "@/lib/api/client";
+import { setToken, disconnectSocket } from "@/lib/api/client";
 import { toast } from "sonner";
 interface NavItem {
   to: string;
@@ -25,6 +25,7 @@ export function MobileNav({ title, subtitle, items }: MobileNavProps) {
   const handleLogout = () => {
     setToken(null);
     saveSession(null);
+    disconnectSocket();
     toast.success("Tizimdan chiqdingiz");
     navigate({ to: "/login" });
     setOpen(false);

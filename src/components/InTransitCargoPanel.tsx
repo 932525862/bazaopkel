@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  ChevronLeft, Truck, Search, Package, MapPin, ArrowRight, RefreshCw,
-  Building2, IdCard, Camera, Clock, Boxes,
+  ChevronLeft, ChevronDown, Truck, Search, Package, MapPin, ArrowRight, RefreshCw,
+  Building2, IdCard, Camera, Clock, Boxes, Layers,
 } from "lucide-react";
 import { toast } from "sonner";
 import { getInTransitCargo, type TransitCargo, type TransitData } from "@/lib/warehouse-transit";
@@ -16,12 +16,38 @@ const STATUS_FILTERS = [
   { key: "partial", label: "Qisman qabul" },
 ] as const;
 
+const NO_DEST_KEY = "__none__";
+
+interface DestGroup {
+  destId: string;
+  destName: string;
+  items: TransitCargo[];
+}
+
 export function InTransitCargoPanel({ onClose }: Props) {
   const [data, setData] = useState<TransitData | null>(null);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<string>("all");
   const [destId, setDestId] = useState<string>("all");
+
+  // Manzil bo'yicha guruhlar — sig'ib ketmasligi uchun standart holatda yig'ilgan
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const toggleGroup = (key: string) =>
+    setExpandedGroups(prev => {
+      const n = new Set(prev);
+      if (n.has(key)) n.delete(key); else n.add(key);
+      return n;
+    });
+
+  // Har bir furaning to'liq tafsiloti — standart holatda yig'ilgan, bosilganda ochiladi
+  const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
+  const toggleCard = (id: string) =>
+    setExpandedCards(prev => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
 
   const load = async () => {
     setLoading(true);
@@ -74,6 +100,27 @@ export function InTransitCargoPanel({ onClose }: Props) {
       { trucks: 0, soni: 0, joys: 0, brutto: 0, vol: 0 },
     );
   }, [filtered]);
+
+  // Manzil ombor bo'yicha guruhlash — 200-300 ta fura bo'lsa ham tartibli ko'rinishi uchun.
+  // Eng ko'p furasi bor manzil tepada.
+  const groups: DestGroup[] = useMemo(() => {
+    const map = new Map<string, DestGroup>();
+    for (const c of filtered) {
+      const key = c.destWarehouseId || NO_DEST_KEY;
+      const name = c.destWarehouseName || "Manzil ko'rsatilmagan";
+      if (!map.has(key)) map.set(key, { destId: key, destName: name, items: [] });
+      map.get(key)!.items.push(c);
+    }
+    return Array.from(map.values()).sort((a, b) => b.items.length - a.items.length);
+  }, [filtered]);
+
+  // Qidiruv yozilganda guruhlash chalg'itmasligi uchun tekis (flat) ro'yxat ko'rsatiladi
+  const isSearching = query.trim().length > 0;
+
+  const allGroupsExpanded = groups.length > 0 && groups.every(g => expandedGroups.has(g.destId));
+  const toggleAllGroups = () => {
+    setExpandedGroups(allGroupsExpanded ? new Set() : new Set(groups.map(g => g.destId)));
+  };
 
   const fmtDateTime = (iso: string) => {
     try {
@@ -165,6 +212,15 @@ export function InTransitCargoPanel({ onClose }: Props) {
             {destOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
           </select>
         )}
+        {!isSearching && groups.length > 1 && (
+          <button
+            onClick={toggleAllGroups}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-[#DDE1EA] bg-white text-xs font-bold text-[#6B7280] hover:border-violet-400 hover:text-violet-700 transition-colors"
+          >
+            <Layers className="w-3.5 h-3.5" />
+            {allGroupsExpanded ? "Hammasini yig'ish" : "Hammasini yoyish"}
+          </button>
+        )}
       </div>
 
       {/* List */}
@@ -181,9 +237,26 @@ export function InTransitCargoPanel({ onClose }: Props) {
             </p>
             <p className="text-xs text-[#C4C9D4] mt-1">Chiqim qilingan, ammo hali qabul qilinmagan yuklar shu yerda ko'rinadi</p>
           </div>
+        ) : isSearching ? (
+          // Qidiruv paytida guruhlash chalg'itadi — to'g'ridan-to'g'ri mos kelganlar ro'yxati
+          <div className="max-w-3xl mx-auto rounded-2xl border border-[#DDE1EA] bg-white shadow-sm divide-y divide-[#F1F2F6] overflow-hidden">
+            {filtered.map(c => (
+              <CompactRow key={c.id} c={c} expanded={expandedCards.has(c.id)} onToggle={() => toggleCard(c.id)} fmtDateTime={fmtDateTime} />
+            ))}
+          </div>
         ) : (
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 max-w-[1400px] mx-auto">
-            {filtered.map(c => <CargoCard key={c.id} c={c} fmtDateTime={fmtDateTime} />)}
+          <div className="max-w-3xl mx-auto space-y-2.5">
+            {groups.map(g => (
+              <GroupSection
+                key={g.destId}
+                group={g}
+                expanded={expandedGroups.has(g.destId)}
+                onToggleGroup={() => toggleGroup(g.destId)}
+                expandedCards={expandedCards}
+                onToggleCard={toggleCard}
+                fmtDateTime={fmtDateTime}
+              />
+            ))}
           </div>
         )}
       </div>
@@ -191,95 +264,149 @@ export function InTransitCargoPanel({ onClose }: Props) {
   );
 }
 
-function CargoCard({ c, fmtDateTime }: { c: TransitCargo; fmtDateTime: (s: string) => string }) {
-  const isPartial = c.status === "partial";
+function GroupSection({
+  group, expanded, onToggleGroup, expandedCards, onToggleCard, fmtDateTime,
+}: {
+  group: DestGroup;
+  expanded: boolean;
+  onToggleGroup: () => void;
+  expandedCards: Set<string>;
+  onToggleCard: (id: string) => void;
+  fmtDateTime: (s: string) => string;
+}) {
+  const partialCount = group.items.filter(c => c.status === "partial").length;
   return (
     <div className="bg-white rounded-2xl border border-[#DDE1EA] shadow-sm overflow-hidden">
-      {/* Top: route + status */}
-      <div className="flex items-center justify-between gap-3 px-4 py-3 bg-violet-50/50 border-b border-violet-100">
-        <div className="flex items-center gap-2 min-w-0 flex-wrap">
-          <span className="flex items-center gap-1 text-xs font-black text-[#374151] min-w-0">
-            <Building2 className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-            <span className="truncate">{c.sourceWarehouseName}</span>
-          </span>
-          <ArrowRight className="w-4 h-4 text-violet-500 shrink-0" />
-          <span className="flex items-center gap-1 text-xs font-black text-violet-700 min-w-0">
-            <MapPin className="w-3.5 h-3.5 shrink-0" />
-            <span className="truncate">{c.destWarehouseName || "Manzil ko'rsatilmagan"}</span>
-          </span>
+      <button
+        onClick={onToggleGroup}
+        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-slate-50/60 transition-colors"
+      >
+        <div className="w-9 h-9 rounded-xl bg-violet-600/10 flex items-center justify-center shrink-0">
+          <MapPin className="w-4.5 h-4.5 text-violet-600" />
         </div>
-        <span className={`text-[11px] font-black px-2.5 py-1 rounded-full border shrink-0 ${
-          isPartial
-            ? "bg-amber-50 text-amber-700 border-amber-200"
-            : "bg-blue-50 text-blue-600 border-blue-200"
-        }`}>
-          {isPartial ? `Qisman qabul ${c.receivedPercent}%` : "Yo'lda"}
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-black text-foreground truncate">{group.destName}</p>
+          <p className="text-[11px] text-muted-foreground mt-0.5">
+            {group.items.length} ta fura{partialCount > 0 ? ` · ${partialCount} tasi qisman qabul qilingan` : ""}
+          </p>
+        </div>
+        <ChevronDown className={`w-4.5 h-4.5 text-muted-foreground shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`} />
+      </button>
+      {expanded && (
+        <div className="border-t border-[#EEF0F5] divide-y divide-[#F1F2F6]">
+          {group.items.map(c => (
+            <CompactRow key={c.id} c={c} expanded={expandedCards.has(c.id)} onToggle={() => onToggleCard(c.id)} fmtDateTime={fmtDateTime} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CompactRow({
+  c, expanded, onToggle, fmtDateTime,
+}: {
+  c: TransitCargo;
+  expanded: boolean;
+  onToggle: () => void;
+  fmtDateTime: (s: string) => string;
+}) {
+  const isPartial = c.status === "partial";
+  return (
+    <div>
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center gap-2.5 px-4 py-2.5 text-left hover:bg-slate-50/60 transition-colors"
+      >
+        <span className={`w-2 h-2 rounded-full shrink-0 ${isPartial ? "bg-amber-500" : "bg-violet-500"}`} />
+        <span className="text-xs font-black font-mono text-foreground shrink-0 w-23 truncate">{c.vehicleNumber}</span>
+        <span className="hidden md:flex items-center gap-1 text-[10px] text-muted-foreground shrink-0 w-32 truncate">
+          <Building2 className="w-3 h-3 shrink-0" /> {c.sourceWarehouseName}
         </span>
-      </div>
-
-      {/* Meta */}
-      <div className="px-4 py-3 space-y-1.5">
-        <div className="flex flex-wrap gap-x-4 gap-y-1">
-          <span className="text-xs text-muted-foreground flex items-center gap-1">
-            <Truck className="w-3.5 h-3.5" /> Fura: <strong className="font-mono text-foreground">{c.vehicleNumber}</strong>
+        <span className="flex-1 min-w-0 text-xs text-muted-foreground truncate">
+          <strong className="font-mono text-violet-700">{c.clientCode}</strong>
+          {c.clientName ? <span className="text-foreground"> — {c.clientName}</span> : null}
+        </span>
+        {isPartial && (
+          <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 shrink-0">
+            {c.receivedPercent}%
           </span>
-          <span className="text-xs text-muted-foreground flex items-center gap-1">
-            <IdCard className="w-3.5 h-3.5" /> Mijoz: <strong className="font-mono text-violet-700">{c.clientCode}</strong>
-            {c.clientName ? <span className="text-foreground"> — {c.clientName}</span> : null}
-          </span>
-          {c.clientPhone && (
-            <span className="text-xs text-muted-foreground">Tel: <strong className="text-foreground">{c.clientPhone}</strong></span>
-          )}
-          <span className="text-xs text-muted-foreground flex items-center gap-1">
-            <Clock className="w-3.5 h-3.5" /> {c.date}
-          </span>
-          {c.photoCount > 0 && (
-            <span className="text-xs text-muted-foreground flex items-center gap-1">
-              <Camera className="w-3.5 h-3.5" /> {c.photoCount}
-            </span>
-          )}
-        </div>
-        {c.note && <p className="text-[11px] italic text-muted-foreground">Izoh: {c.note}</p>}
-
-        {/* Products */}
-        {c.products.length > 0 && (
-          <div className="mt-1.5 rounded-xl border border-border/60 overflow-hidden">
-            <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-3 px-3 py-1.5 bg-slate-50 text-[10px] font-black uppercase tracking-wider text-muted-foreground/70">
-              <span>Tovar</span><span className="text-right">Soni</span><span className="text-right">Joy</span><span className="text-right">Brutto</span><span className="text-right">Hajm</span>
-            </div>
-            {c.products.map((p, i) => (
-              <div key={i} className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-3 px-3 py-1.5 text-[11px] border-t border-border/40 items-center">
-                <span className="font-bold text-foreground truncate">
-                  {p.name}
-                  {p.sharePercent < 100 && <span className="text-amber-600 font-medium"> · {p.sharePercent}%</span>}
-                </span>
-                <span className="text-right text-foreground font-medium">{p.soni}</span>
-                <span className="text-right text-muted-foreground">{p.joys}</span>
-                <span className="text-right text-muted-foreground">{p.brutto} kg</span>
-                <span className="text-right text-muted-foreground">{p.vol} m³</span>
-              </div>
-            ))}
-          </div>
         )}
-
-        {/* Totals: dispatched vs still in transit */}
-        <div className="grid grid-cols-2 gap-2 mt-2">
-          <div className="rounded-xl border border-border/60 bg-slate-50/70 px-3 py-2">
-            <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground/60 mb-1">Jo'natilgan (jami)</p>
-            <p className="text-[11px] text-foreground font-bold">
-              {c.totals.soni} dona · {c.totals.joys} joy · {c.totals.brutto} kg · {c.totals.vol} m³
-            </p>
-          </div>
-          <div className="rounded-xl border border-violet-200 bg-violet-50/60 px-3 py-2">
-            <p className="text-[10px] font-black uppercase tracking-wider text-violet-500 mb-1">Hozir yo'lda</p>
-            <p className="text-[11px] text-violet-700 font-bold">
-              {c.inTransitTotals.soni} dona · {c.inTransitTotals.joys} joy · {c.inTransitTotals.brutto} kg · {c.inTransitTotals.vol} m³
-            </p>
-          </div>
+        <span className="text-[11px] text-muted-foreground shrink-0 hidden sm:inline">{c.date}</span>
+        <ChevronDown className={`w-4 h-4 text-muted-foreground shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`} />
+      </button>
+      {expanded && (
+        <div className="px-4 pb-3.5 -mt-0.5">
+          <CargoDetail c={c} fmtDateTime={fmtDateTime} />
         </div>
+      )}
+    </div>
+  );
+}
 
-        <p className="text-[10px] text-muted-foreground/50 mt-1">Chiqim vaqti: {fmtDateTime(c.createdAt)}</p>
+/** Bitta fura/yukning to'liq tafsiloti — qator bosilganda ochiladi */
+function CargoDetail({ c, fmtDateTime }: { c: TransitCargo; fmtDateTime: (s: string) => string }) {
+  return (
+    <div className="rounded-xl border border-border/60 bg-slate-50/40 px-3.5 py-3 space-y-2">
+      <div className="flex flex-wrap gap-x-4 gap-y-1">
+        <span className="text-xs text-muted-foreground flex items-center gap-1 md:hidden">
+          <Building2 className="w-3.5 h-3.5" /> Manba: <strong className="text-foreground">{c.sourceWarehouseName}</strong>
+        </span>
+        <span className="text-xs text-muted-foreground flex items-center gap-1">
+          <MapPin className="w-3.5 h-3.5" /> Manzil: <strong className="text-foreground">{c.destWarehouseName || "Ko'rsatilmagan"}</strong>
+        </span>
+        {c.clientPhone && (
+          <span className="text-xs text-muted-foreground">Tel: <strong className="text-foreground">{c.clientPhone}</strong></span>
+        )}
+        <span className="text-xs text-muted-foreground flex items-center gap-1">
+          <Clock className="w-3.5 h-3.5" /> {c.date}
+        </span>
+        {c.photoCount > 0 && (
+          <span className="text-xs text-muted-foreground flex items-center gap-1">
+            <Camera className="w-3.5 h-3.5" /> {c.photoCount}
+          </span>
+        )}
       </div>
+      {c.note && <p className="text-[11px] italic text-muted-foreground">Izoh: {c.note}</p>}
+
+      {/* Products */}
+      {c.products.length > 0 && (
+        <div className="rounded-xl border border-border/60 bg-white overflow-hidden">
+          <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-3 px-3 py-1.5 bg-slate-50 text-[10px] font-black uppercase tracking-wider text-muted-foreground/70">
+            <span>Tovar</span><span className="text-right">Soni</span><span className="text-right">Joy</span><span className="text-right">Brutto</span><span className="text-right">Hajm</span>
+          </div>
+          {c.products.map((p, i) => (
+            <div key={i} className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-3 px-3 py-1.5 text-[11px] border-t border-border/40 items-center">
+              <span className="font-bold text-foreground truncate">
+                {p.name}
+                {p.sharePercent < 100 && <span className="text-amber-600 font-medium"> · {p.sharePercent}%</span>}
+              </span>
+              <span className="text-right text-foreground font-medium">{p.soni}</span>
+              <span className="text-right text-muted-foreground">{p.joys}</span>
+              <span className="text-right text-muted-foreground">{p.brutto} kg</span>
+              <span className="text-right text-muted-foreground">{p.vol} m³</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Totals: dispatched vs still in transit */}
+      <div className="grid grid-cols-2 gap-2">
+        <div className="rounded-xl border border-border/60 bg-white px-3 py-2">
+          <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground/60 mb-1">Jo'natilgan (jami)</p>
+          <p className="text-[11px] text-foreground font-bold">
+            {c.totals.soni} dona · {c.totals.joys} joy · {c.totals.brutto} kg · {c.totals.vol} m³
+          </p>
+        </div>
+        <div className="rounded-xl border border-violet-200 bg-violet-50/60 px-3 py-2">
+          <p className="text-[10px] font-black uppercase tracking-wider text-violet-500 mb-1">Hozir yo'lda</p>
+          <p className="text-[11px] text-violet-700 font-bold">
+            {c.inTransitTotals.soni} dona · {c.inTransitTotals.joys} joy · {c.inTransitTotals.brutto} kg · {c.inTransitTotals.vol} m³
+          </p>
+        </div>
+      </div>
+
+      <p className="text-[10px] text-muted-foreground/50">Chiqim vaqti: {fmtDateTime(c.createdAt)}</p>
     </div>
   );
 }

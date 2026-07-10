@@ -28,6 +28,24 @@ function ForgotPasswordPage() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  const handleRequestOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!phone.trim()) {
+      toast.error("Telefon raqamni kiriting");
+      return;
+    }
+    setLoading(true);
+    try {
+      await API.requestPasswordReset(phone);
+      setStep("pincode");
+      toast.success("Tasdiqlash kodi Telegram botga yuborildi");
+    } catch (err: any) {
+      toast.error(err.message || "Kod yuborishda xatolik");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleVerifyPincode = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!phone.trim() || !pincode.trim()) {
@@ -95,7 +113,7 @@ function ForgotPasswordPage() {
           </h1>
           <p className="text-center text-sm text-muted-foreground mt-1 mb-6">
             {step === "phone" && "Telefon raqamingizni kiriting"}
-            {step === "pincode" && "Direktor tomonidan belgilangan pinkodni kiriting"}
+            {step === "pincode" && "Telegram botga yuborilgan kodni kiriting"}
             {step === "newpass" && "Yangi parolni kiriting"}
             {step === "success" && "Parol muvaffaqiyatli o'zgartirildi"}
           </p>
@@ -118,17 +136,7 @@ function ForgotPasswordPage() {
 
           {/* Step: Phone */}
           {step === "phone" && (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (!phone.trim()) {
-                  toast.error("Telefon raqamni kiriting");
-                  return;
-                }
-                setStep("pincode");
-              }}
-              className="space-y-4"
-            >
+            <form onSubmit={handleRequestOtp} className="space-y-4">
               <div>
                 <label className="text-sm font-medium text-foreground block mb-1.5">
                   <Phone className="w-4 h-4 inline mr-1.5 -mt-0.5 text-primary" />
@@ -147,9 +155,10 @@ function ForgotPasswordPage() {
               </div>
               <button
                 type="submit"
-                className="w-full py-2.5 rounded-lg bg-primary text-primary-foreground font-semibold shadow-lg hover:bg-primary-hover transition-all"
+                disabled={loading}
+                className="w-full py-2.5 rounded-lg bg-primary text-primary-foreground font-semibold shadow-lg hover:bg-primary-hover transition-all disabled:opacity-50"
               >
-                Davom etish
+                {loading ? "Yuborilmoqda..." : "Davom etish"}
               </button>
             </form>
           )}
@@ -174,7 +183,7 @@ function ForgotPasswordPage() {
                   required
                 />
                 <p className="text-xs text-muted-foreground mt-2">
-                  Direktor tomonidan belgilangan 4–6 raqamli pincode
+                  Telegram botdagi xabarda kelgan 6 xonali kod (10 daqiqa amal qiladi)
                 </p>
               </div>
               <button

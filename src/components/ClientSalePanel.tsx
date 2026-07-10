@@ -7,7 +7,7 @@ import { useSession } from "@/lib/store";
 import { ConfirmModal } from "@/components/ConfirmModal";
 import { TelegramUserSingleSelect } from "@/components/TelegramUserSingleSelect";
 import { TelegramMessageModal } from "@/components/TelegramMessageModal";
-import { formatUzDate, getTashkentDayjs } from "@/lib/date-utils";
+import { formatUzDate, getTashkentDayjs, tashkentInputToIso } from "@/lib/date-utils";
 
 /**
  * ClientSalePanel — «Mijozlar» bo'limidagi TO'LIQ FUNKSIONAL sotuv/to'lov bloki.
@@ -92,7 +92,7 @@ export function ClientSalePanel({ client, onRefresh, readOnly = false, attachedT
         totalAmount: total,
         paidAmount: paid,
         additionalPrice: addAmt,
-        nextPaymentAt: new Date(partialNextDate).toISOString(),
+        nextPaymentAt: tashkentInputToIso(partialNextDate),
         telegramId: leaseWarningTelegramId,
       });
       await API.updateClient(client.id, { stage: "sold" });

@@ -172,6 +172,14 @@ export function exportWarehouseChiqim(warehouseName: string, entries: WarehouseA
   return list.length;
 }
 
+/** Foydalanuvchi arxivda belgilagan aniq yozuvlarni (istalgan turdagi aralash) .xlsx qilib yuklab olish */
+export function exportWarehouseSelected(warehouseName: string, selectedEntries: WarehouseArchiveEntry[]): number {
+  const { rows } = buildRows(selectedEntries);
+  const sheet: SheetData = { name: "Tanlangan", rows };
+  downloadXlsx(`${safeFile(warehouseName)}_tanlangan_${today()}.xlsx`, [sheet]);
+  return selectedEntries.length;
+}
+
 /** Ikkalasi bitta faylda — Kirim va Chiqim alohida varaqlarda */
 export function exportWarehouseAll(warehouseName: string, entries: WarehouseArchiveEntry[]): void {
   const kirim = buildRows(entries.filter(e => KIRIM_EVENTS.includes(e.eventType)));

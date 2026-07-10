@@ -1,7 +1,7 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { LogOut, Briefcase, User, LayoutDashboard } from "lucide-react";
 import { saveSession, clearSensitiveState } from "@/lib/store";
-import { setToken } from "@/lib/api/client";
+import { setToken, disconnectSocket } from "@/lib/api/client";
 import { toast } from "sonner";
 interface NavItem {
   to: string;
@@ -24,6 +24,7 @@ export function CrmSidebar({ title, subtitle, items, footer }: SidebarProps) {
     setToken(null);
     saveSession(null);
     clearSensitiveState();
+    disconnectSocket();
     toast.success("Tizimdan chiqdingiz");
     navigate({ to: "/login" });
   };

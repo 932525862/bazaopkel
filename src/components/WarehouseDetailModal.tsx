@@ -505,6 +505,15 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
   // Chiqaruvchi ombor: chiqim usuli — "truck" (tovar/fura) yoki "client" (mijoz bo'yicha).
   // FAQAT chiqaruvchi turida ikkala tizim ham mavjud.
   const [uzbChiqimMode, setUzbChiqimMode] = useState<"truck" | "client">("truck");
+
+  // Chiqaruvchi (uzbekistan) omborda "Tovar / fura chiqimi" tugmasi olib tashlangan —
+  // endi bu turda faqat mijoz bo'yicha chiqim bor, shuning uchun "tur tanlang" oraliq
+  // ekraniga tushmasdan to'g'ridan-to'g'ri o'sha formaga o'tkaziladi.
+  useEffect(() => {
+    if (warehouse.type === "uzbekistan" && tab === "chiqim" && chiqimType === null) {
+      setChiqimType("client");
+    }
+  }, [warehouse.type, tab, chiqimType]);
   const [outgoingTransfers, setOutgoingTransfers] = useState<UzbTransfer[]>([]);
   const [incomingTransfers, setIncomingTransfers] = useState<UzbTransfer[]>([]);
   const [allWarehouses, setAllWarehouses] = useState<Warehouse[]>([]);
@@ -1599,7 +1608,15 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
         }
       }
 
-      for (const [kirimRecordId, productIds] of Object.entries(groups)) {
+      // Bitta furaga bir nechta kirim yozuvidan tovar tanlansa, tovarlar soni
+      // EMAS, balki kirim-yozuv guruhlari sonicha alohida chiqim yaratiladi.
+      // Rasm esa BITTA — shuning uchun uni faqat BIRINCHI guruhga yuboramiz,
+      // aks holda har bir guruh o'zining nusxasini saqlab, qabul qiluvchi
+      // ombor tomonida bitta rasm shu furaga tegishli barcha yozuvlar
+      // bo'yicha ko'payib ko'rinadi (guruhlar soni bo'yicha).
+      const groupEntries = Object.entries(groups);
+      for (let groupIndex = 0; groupIndex < groupEntries.length; groupIndex++) {
+        const [kirimRecordId, productIds] = groupEntries[groupIndex];
         const kr = allProductMap[productIds[0]]?.kirimRecord;
 
         // Har bir tovar uchun: qancha joy olinadi (asos bo'yicha kiritilgan
@@ -1648,7 +1665,7 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
           selectedProductIds: productIds,
           productRatios,
           vehicleNumber: vehicleNumber.trim(),
-          photos,
+          photos: groupIndex === 0 ? photos : [],
           note: chiqimNote.trim() || undefined,
           destWarehouseId: chiqimDestId,
         });
@@ -1707,7 +1724,13 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
         groups[rid].ratios[pid] = Math.round(take * 10000) / 10000;
       }
 
-      for (const [kirimRecordId, { productIds, ratios, source }] of Object.entries(groups)) {
+      // Bir nechta kirim-yozuv guruhi bo'lsa ham, rasm faqat BIRINCHI guruhga
+      // biriktiriladi — aks holda bitta yuklangan rasm qabul qiluvchi ombor
+      // tomonida guruhlar sonicha ko'payib ko'rinadi (fura raqami bo'yicha
+      // birlashtirilganda).
+      const ortaGroupEntries = Object.entries(groups);
+      for (let groupIndex = 0; groupIndex < ortaGroupEntries.length; groupIndex++) {
+        const [kirimRecordId, { productIds, ratios, source }] = ortaGroupEntries[groupIndex];
         await addChiqimRecordV2({
           warehouseId: warehouse.id,
           date: new Date().toISOString().slice(0, 10),
@@ -1718,7 +1741,7 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
           selectedProductIds: productIds,
           productRatios: ratios,
           vehicleNumber: vehicleNumber.trim(),
-          photos,
+          photos: groupIndex === 0 ? photos : [],
           note: chiqimNote.trim() || undefined,
           destWarehouseId: chiqimDestId,
         });
@@ -3000,8 +3023,9 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
               </div>
             )}
 
-            {/* ── CHIQARUVCHI: chiqim usuli tanlovi — ikkala tizim ham bor ── */}
-            {tab === "chiqim" && !isOrtaMijoz && (
+            {/* ── CHIQARUVCHI: chiqim usuli tanlovi — faqat "uzbekistan" turida ikkalasi ham bo'lgan,
+                 endi "Tovar / fura chiqimi" chiqarib tashlandi, shu tur uchun faqat mijoz bo'yicha qoladi ── */}
+            {tab === "chiqim" && !isOrtaMijoz && warehouse.type !== "uzbekistan" && (
               <div className="flex gap-2 px-4 py-2.5 bg-white border-b border-[#EEF0F5] shrink-0">
                 {([
                   { key: "truck",  label: "Tovar / fura chiqimi",  icon: <Truck className="w-3.5 h-3.5" /> },
@@ -3030,8 +3054,9 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
               </div>
             )}
 
-            {/* ── CHIQARUVCHI CHIQIM tab — tovar+fura chiqimi (o'rta ombordagidek) ── */}
-            {tab === "chiqim" && !isOrtaMijoz && uzbChiqimMode === "truck" && (
+            {/* ── CHIQARUVCHI CHIQIM tab — tovar+fura chiqimi (o'rta ombordagidek).
+                 "uzbekistan" (Chiqaruvchi) turi uchun bu panel endi umuman ko'rsatilmaydi ── */}
+            {tab === "chiqim" && !isOrtaMijoz && warehouse.type !== "uzbekistan" && uzbChiqimMode === "truck" && (
               <div className="flex-1 flex flex-col min-h-0 overflow-hidden relative bg-[#F5F6FA]">
                 <div className="flex flex-col overflow-hidden flex-1 min-h-0">
                   {/* Header */}
@@ -3459,8 +3484,9 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
               </div>
             )}
 
-            {/* ── MIJOZ BO'YICHA CHIQIM — o'rta mijoz (doim) yoki chiqaruvchi (tanlovda) ── */}
-            {tab === "chiqim" && (isOrtaMijoz || uzbChiqimMode === "client") && (
+            {/* ── MIJOZ BO'YICHA CHIQIM — o'rta mijoz va chiqaruvchi (uzbekistan) uchun doim,
+                 boshqa turlar uchun faqat "client" tanlanganda ── */}
+            {tab === "chiqim" && (isOrtaMijoz || warehouse.type === "uzbekistan" || uzbChiqimMode === "client") && (
               <div className="flex-1 flex flex-col min-h-0 overflow-hidden relative bg-[#F5F6FA]">
 
                 {/* Active clients (full width) */}

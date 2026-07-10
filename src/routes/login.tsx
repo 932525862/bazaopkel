@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
 import { useSession, saveSession } from "@/lib/store";
 import { API, setToken } from "@/lib/api/client";
+import { registerPushNotifications } from "@/lib/push-notification";
 import { formatUzbekPhone } from "@/lib/utils";
 import { Briefcase } from "lucide-react";
 import { toast } from "sonner";
@@ -44,7 +45,11 @@ function LoginPage() {
       const fullName = `${user.firstName} ${user.lastName}`.trim();
       saveSession({ id: user.id || user.sub, role: userRole as "director" | "employee", name: fullName, login: user.phoneNumber });
       toast.success(`Xush kelibsiz, ${fullName}`);
-      
+      // Root layout'dagi effekt faqat to'liq sahifa yuklanganda ishga tushadi — SPA
+      // navigatsiyasida qayta ishga tushmaydi, shuning uchun bu yerda ham chaqiramiz
+      // (aks holda birinchi login'da push-bildirishnomalar ro'yxatdan o'tmay qoladi).
+      registerPushNotifications().catch(() => {});
+
       if (userRole === "director") navigate({ to: "/director" });
       else navigate({ to: "/employee" });
     } catch (err: any) {

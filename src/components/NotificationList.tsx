@@ -16,7 +16,7 @@ import {
   ExternalLink
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getTashkentDayjs, formatUzDateTime } from "@/lib/date-utils";
+import { getTashkentDayjs, formatUzDateTime, tashkentInputToIso } from "@/lib/date-utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -108,12 +108,19 @@ const typeConfig: Record<string, { icon: any; color: string; label: string; bg: 
     label: "Davomat",
     gradient: "from-purple-500/10 via-purple-500/5 to-transparent"
   },
-  department_update: { 
-    icon: Layers, 
-    color: "text-cyan-500", 
-    bg: "bg-cyan-500/10", 
+  department_update: {
+    icon: Layers,
+    color: "text-cyan-500",
+    bg: "bg-cyan-500/10",
     label: "Bo'lim yangilandi",
     gradient: "from-cyan-500/10 via-cyan-500/5 to-transparent"
+  },
+  client_created: {
+    icon: User,
+    color: "text-teal-500",
+    bg: "bg-teal-500/10",
+    label: "Yangi mijoz",
+    gradient: "from-teal-500/10 via-teal-500/5 to-transparent"
   },
   form_update: { 
     icon: FileText, 
@@ -378,7 +385,7 @@ export function NotificationList({
             setLoading(true);
             try {
               await API.addNote(selectedClientId, "Qayta eslatma (ogohlantirish) yuborildi");
-              await API.warnClient(selectedClientId, new Date(time).toISOString());
+              await API.warnClient(selectedClientId, tashkentInputToIso(time));
               toast.success("Ogohlantirish yuborildi");
               setShowReminderModal(false);
               setSelectedClientId(null);

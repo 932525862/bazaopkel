@@ -12,7 +12,7 @@ import {
   type Warehouse,
   type WarehouseArchiveEntry,
 } from "@/lib/warehouse";
-import { exportWarehouseKirim, exportWarehouseChiqim } from "@/lib/warehouse-excel";
+import { exportWarehouseKirim, exportWarehouseChiqim, exportWarehouseSelected } from "@/lib/warehouse-excel";
 
 /**
  * OMBOR ARXIVI PANELI — o'chirib bo'lmaydigan tarix.
@@ -134,6 +134,16 @@ export function WarehouseArchivePanel({ warehouse, onClose }: Props) {
       return n;
     });
 
+  // Excelga faqat tanlangan yozuvlarni yuklab olish uchun belgilash
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const toggleSelect = (id: string) =>
+    setSelectedIds(prev => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  const clearSelection = () => setSelectedIds(new Set());
+
   const load = async () => {
     setLoading(true);
     try {
@@ -219,6 +229,25 @@ export function WarehouseArchivePanel({ warehouse, onClose }: Props) {
     }
   };
 
+  const handleExportSelected = () => {
+    // `entries`dan olamiz (`filtered`dan emas) — qidiruv/filtr keyinroq o'zgarsa ham,
+    // avval belgilangan yozuv tanlovdan chiqib qolmasin
+    const selected = entries.filter(e => selectedIds.has(e.id));
+    if (selected.length === 0) {
+      toast.info("Hech narsa tanlanmagan");
+      return;
+    }
+    try {
+      const n = exportWarehouseSelected(warehouse.name, selected);
+      toast.success(`${n} ta tanlangan yozuv Excelga yuklandi`);
+      clearSelection();
+    } catch (err: any) {
+      toast.error(err?.message || "Excel yaratishda xatolik");
+    }
+  };
+
+  const selectAllFiltered = () => setSelectedIds(new Set(filtered.map(e => e.id)));
+
   return (
     <div className="fixed inset-0 z-[70] bg-[#F5F6FA] flex flex-col">
       {/* Header */}
@@ -268,23 +297,53 @@ export function WarehouseArchivePanel({ warehouse, onClose }: Props) {
           ))}
         </div>
 
-        {/* Excel yuklab olish — kirim va chiqim alohida */}
+        {/* Excel yuklab olish — hammasi (kirim/chiqim) yoki faqat belgilangan yozuvlar */}
         <div className="flex gap-2">
           <button
             onClick={handleExportKirim}
             disabled={loading}
             className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-black border border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100 disabled:opacity-50 transition-colors"
           >
-            <Download className="w-3.5 h-3.5" /> Kirim — Excel
+            <Download className="w-3.5 h-3.5" /> Hammasi — Kirim Excel
           </button>
           <button
             onClick={handleExportChiqim}
             disabled={loading}
             className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-black border border-amber-200 bg-amber-50 text-amber-600 hover:bg-amber-100 disabled:opacity-50 transition-colors"
           >
-            <Download className="w-3.5 h-3.5" /> Chiqim — Excel
+            <Download className="w-3.5 h-3.5" /> Hammasi — Chiqim Excel
           </button>
         </div>
+
+        {/* Belgilash orqali faqat kerakli yozuvlarni (masalan 3-4 ta fura) yuklab olish */}
+        {filtered.length > 0 && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={selectAllFiltered}
+              disabled={loading}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-bold border border-[#DDE1EA] bg-white text-[#6B7280] hover:bg-[#F5F6FA] disabled:opacity-50 transition-colors"
+            >
+              <CheckSquare className="w-3.5 h-3.5" /> Ko'rinayotganlarni tanlash ({filtered.length})
+            </button>
+            {selectedIds.size > 0 && (
+              <>
+                <span className="text-[11px] font-black text-[#005AB5]">{selectedIds.size} ta tanlandi</span>
+                <button
+                  onClick={handleExportSelected}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-black border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5" /> Tanlanganlarni yuklab olish
+                </button>
+                <button
+                  onClick={clearSelection}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold text-[#9CA3AF] hover:text-[#6B7280] transition-colors"
+                >
+                  <XIcon className="w-3 h-3" /> Bekor qilish
+                </button>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Entries */}
@@ -315,9 +374,17 @@ export function WarehouseArchivePanel({ warehouse, onClose }: Props) {
                 (Array.isArray(d.products) && d.products.length)
               );
               const expanded = expandedIds.has(e.id);
+              const isSelected = selectedIds.has(e.id);
               return (
-                <div key={e.id} className="bg-white rounded-2xl border border-[#DDE1EA] shadow-sm overflow-hidden">
+                <div key={e.id} className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${isSelected ? "border-[#005AB5] ring-1 ring-[#005AB5]/30" : "border-[#DDE1EA]"}`}>
                   <div className="flex items-start gap-3 px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleSelect(e.id)}
+                      title="Excelga yuklab olish uchun tanlash"
+                      className="mt-2.5 w-4 h-4 shrink-0 accent-[#005AB5] cursor-pointer"
+                    />
                     <div className={`w-9 h-9 rounded-xl border flex items-center justify-center shrink-0 mt-0.5 ${meta.cls}`}>
                       <Icon className="w-4.5 h-4.5" />
                     </div>

@@ -6,7 +6,7 @@ import type { Client, AppState, SaleInfo, ClientStage } from "@/lib/types";
 import { toast } from "sonner";
 import { API } from "@/lib/api/client";
 import { ConfirmModal } from "@/components/ConfirmModal";
-import { formatUzDateTime, formatUzDate, getTashkentDayjs } from "@/lib/date-utils";
+import { formatUzDateTime, formatUzDate, getTashkentDayjs, tashkentInputToIso } from "@/lib/date-utils";
 import { TelegramUserSingleSelect } from "@/components/TelegramUserSingleSelect";
 import { TelegramMessageModal } from "@/components/TelegramMessageModal";
 import { ReminderModal } from "@/components/ReminderModal";
@@ -349,7 +349,7 @@ export function ClientDetailDialog({
         totalAmount: total,
         paidAmount: paid,
         additionalPrice: addAmt,
-        nextPaymentAt: new Date(partialNextDate).toISOString(),
+        nextPaymentAt: tashkentInputToIso(partialNextDate),
         telegramId: leaseWarningTelegramId
       });
       await API.updateClient(localClient.id, { stage: "sold" });
@@ -547,7 +547,7 @@ export function ClientDetailDialog({
       }
       const payload: any = { stage: action };
       if (callReminder) {
-        payload.remindAt = new Date(callReminder).toISOString();
+        payload.remindAt = tashkentInputToIso(callReminder);
         setCallReminder("");
       }
 
@@ -580,7 +580,7 @@ export function ClientDetailDialog({
       }
       const payload: any = { stage: "talked" };
       if (callReminder) {
-        payload.remindAt = new Date(callReminder).toISOString();
+        payload.remindAt = tashkentInputToIso(callReminder);
         setCallReminder("");
       }
       await API.updateClient(localClient.id, payload);
