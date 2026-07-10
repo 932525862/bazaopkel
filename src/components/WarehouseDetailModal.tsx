@@ -50,6 +50,7 @@ import {
 import { ConfirmModal } from "@/components/ConfirmModal";
 import { WarehouseKirimWizard } from "@/components/WarehouseKirimWizard";
 import { WarehouseArchivePanel } from "@/components/WarehouseArchivePanel";
+import { ClientSalePanel } from "@/components/ClientSalePanel";
 
 interface Props {
   warehouse: Warehouse;
@@ -464,27 +465,38 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
   const paymentsEnabled = warehouse.type === "ortaMijoz" || warehouse.type === "uzbekistan";
   const [payMode, setPayMode] = useState<"none" | "full" | "partial">("none");
   const [payTotal, setPayTotal] = useState("");
+  const [payAdditional, setPayAdditional] = useState(""); // qo'shimcha narx (jami summaning bir qismi) — statistikada alohida ko'rinadi
   const [payPaid, setPayPaid] = useState("");
   const [payNextDate, setPayNextDate] = useState("");
-  const resetPayment = () => { setPayMode("none"); setPayTotal(""); setPayPaid(""); setPayNextDate(""); };
+  const resetPayment = () => { setPayMode("none"); setPayTotal(""); setPayAdditional(""); setPayPaid(""); setPayNextDate(""); };
 
   // ── TO'LOVLAR paneli: chiqimlardan keyingi to'liq to'lov holati.
   // Snapshot dispatch.payment da, jonli holat Mijozlar bo'limidan olinadi. ──
   const [showPayments, setShowPayments] = useState(false);
   const [crmClients, setCrmClients] = useState<any[]>([]);
 
-  /** Mijozlar bo'limidagi jonli mijoz ma'lumoti (kod bo'yicha) */
+  /** Mijozlar bo'limidagi jonli mijoz ma'lumoti (kod bo'yicha).
+   *  ASOSIY manba — backend (crmClients.clientCode). Zaxira — localStorage keshi. */
   const crmClientByCode = (code: string): any | null => {
+    const norm = (code || "").toUpperCase().trim();
+    if (!norm) return null;
+    const byServer = crmClients.find((c: any) => (c.clientCode || "").toUpperCase().trim() === norm);
+    if (byServer) return byServer;
     const uuid = clientUuidByCode(code);
     return uuid ? (crmClients.find((c: any) => c.id === uuid) ?? null) : null;
   };
 
   const fmtSum = (v: number) => (Math.round(v * 100) / 100).toLocaleString("ru-RU");
 
-  /** Ombor mijoz kodi (OK/8001) → Mijozlar bo'limidagi mijoz UUID si */
+  /** Ombor mijoz kodi (OK/8001) → Mijozlar bo'limidagi mijoz UUID si.
+   *  ASOSIY manba — server (clientCode), shu sabab boshqa qurilma/brauzerda ham
+   *  to'lov mijozga bog'lanadi va statistikaga tushadi. Zaxira — localStorage keshi. */
   const clientUuidByCode = (code: string | null): string | null => {
     if (!code) return null;
-    const found = Object.entries(storedIds).find(([, v]) => v === code);
+    const norm = code.toUpperCase().trim();
+    const byServer = crmClients.find((c: any) => (c.clientCode || "").toUpperCase().trim() === norm);
+    if (byServer) return byServer.id;
+    const found = Object.entries(storedIds).find(([, v]) => (v || "").toUpperCase().trim() === norm);
     return found ? found[0] : null;
   };
 
@@ -1035,7 +1047,7 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
           {p.places.some(pl => pl.count) && (
             <p className="text-xs text-muted-foreground">Joylar: {p.places.filter(pl => pl.count).map(pl => `${pl.count} ${pl.unit}`).join(", ")}</p>
           )}
-          {p.quantity && <p className="text-xs text-muted-foreground">Soni: {p.quantity}</p>}
+          {p.quantity && <p className="text-xs text-muted-foreground">Soni (manba): {p.quantity}</p>}
           {p.brutto && (
             <p className="text-xs text-muted-foreground">
               Brutto: <span className="font-bold">{p.brutto} {p.bruttoUnit}</span>
@@ -1047,13 +1059,18 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
           <p className="text-[10px] text-muted-foreground/60">
             Kelgan sana: {String(source.date).slice(0, 10)} · Mijoz: {source.clientName || source.clientCode}
           </p>
+          {(hasDispatched || incoming < 0.9995) && (
+            <p className="text-[11px] font-bold text-slate-700 bg-slate-50 border border-slate-200 rounded-md px-2 py-1.5">
+              Qabul qilingan (shu omborga): {Math.round(fullQty * incoming)} dona · {fmt2(totalJoys * incoming)} joy · {fmt2(bruttoKg(p) * incoming)} kg · {fmt3(fullVol * incoming)} m³
+            </p>
+          )}
           {hasDispatched && (
-            <p className="text-[10px] font-bold text-red-600 bg-red-50 border border-red-100 rounded-md px-2 py-1">
+            <p className="text-[11px] font-bold text-red-600 bg-red-50 border border-red-100 rounded-md px-2 py-1.5">
               Chiqib ketgan: {Math.round(fullQty * dispatchedShare)} dona · {fmt2(totalJoys * dispatchedShare)} joy · {fmt2(bruttoKg(p) * dispatchedShare)} kg · {fmt3(fullVol * dispatchedShare)} m³
             </p>
           )}
           {(isPartial || hasDispatched) && (
-            <p className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-md px-2 py-1">
+            <p className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-md px-2 py-1.5">
               Omborda qolgan: {Math.round(fullQty * available)} dona · {fmt2(totalJoys * available)} joy · {fmt2(bruttoKg(p) * available)} kg · {fmt3(fullVol * available)} m³
             </p>
           )}
@@ -1859,26 +1876,27 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
       toast.error("Miqdor kiriting"); return;
     }
 
-    // ── To'lov validatsiyasi — faqat O'rta mijoz omborida (Mijozlar modul qoidalari) ──
-    const payActive = paymentsEnabled && payMode !== "none";
-    const total = parseFloat(payTotal || "0");
-    const paid = parseFloat(payPaid || "0");
-    if (payActive && payMode === "full" && total <= 0) { toast.error("To'lov summasini kiriting"); return; }
-    if (payActive && payMode === "partial") {
-      if (total <= 0 || paid <= 0) { toast.error("To'liq summa va to'langan summani kiriting"); return; }
-      if (paid >= total) { toast.error("To'langan summa to'liq summadan kichik bo'lishi kerak"); return; }
-      if (!payNextDate) { toast.error("Keyingi to'lov sanasini kiriting"); return; }
+    // ── TO'LOV MAJBURIY — mijozga chiqim (ID bo'yicha) faqat sotuv rasmiylashtirilgach.
+    // Tovarni to'lovsiz jo'natish mumkin emas. Sotuv «Sotuv» bloki orqali qilinadi. ──
+    if (paymentsEnabled && chiqimType === "client") {
+      const sc = crmClientByCode(selectedDispatchClientCode);
+      const saleStatus = sc?.sale?.status ?? "none";
+      if (!sc) {
+        toast.error("Mijoz «Mijozlar» bo'limida topilmadi — sotuvni rasmiylashtirib bo'lmaydi");
+        return;
+      }
+      if (saleStatus === "none") {
+        toast.error("Avval «Sotuv» bo'limida to'lovni rasmiylashtiring — to'lovsiz chiqim mumkin emas");
+        return;
+      }
     }
 
     setDispatchSaving(true);
     try {
-      // Izohga to'lov ma'lumoti ham qo'shiladi — chiqim arxivida to'liq ko'rinadi
-      const payNote = !payActive
-        ? ""
-        : payMode === "full"
-          ? `To'lov: ${fmtSum(total)} so'm — to'liq to'landi`
-          : `To'lov: ${fmtSum(paid)} / ${fmtSum(total)} so'm — qisman to'landi · keyingi to'lov: ${payNextDate}`;
-      const fullNote = [dispatchNote.trim(), payNote].filter(Boolean).join(" | ");
+      // ESLATMA: sotuv/to'lov endi ClientSalePanel orqali mijoz kartasiga alohida
+      // yoziladi (statistikaga shu orqali tushadi). Bu yerda faqat tovar chiqimi
+      // (yuk harakati) qayd etiladi.
+      const fullNote = dispatchNote.trim();
 
       const ratios: Record<string, number> = {};
       for (const cr of selectedClientActiveRecords) ratios[cr.id] = dispatchRatio;
@@ -1889,43 +1907,9 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
         chiqimRecordIds: selectedClientActiveRecords.map(cr => cr.id),
         ratios,
         note: fullNote || undefined,
-        payment: !payActive
-          ? { mode: "none" }
-          : {
-              mode: payMode,
-              totalAmount: total,
-              paidAmount: payMode === "full" ? total : paid,
-              nextPaymentAt: payMode === "partial" && payNextDate ? new Date(payNextDate).toISOString() : undefined,
-            },
+        payment: { mode: "none" },
         dispatchedAt: new Date().toISOString().slice(0, 10),
       });
-
-      // ── Mijozlar modulidagi TAYYOR to'lov tizimiga yozish (faqat O'rta mijoz) ──
-      if (payActive) {
-        const clientUuid = clientUuidByCode(selectedDispatchClientCode);
-        if (!clientUuid) {
-          toast.warning("Chiqim saqlandi, lekin mijoz «Mijozlar» bo'limida topilmadi — to'lov yozilmadi");
-        } else {
-          try {
-            if (payMode === "full") {
-              // Sotildi (to'liq): jami summa = to'langan summa
-              await API.setSale(clientUuid, { status: "full", totalAmount: total, paidAmount: total });
-            } else {
-              // Sotildi (qisman): to'langan qismi payment sifatida yoziladi,
-              // qolgani uchun keyingi to'lov sanasi eslatma tizimiga tushadi
-              await API.setSale(clientUuid, {
-                status: "partial",
-                totalAmount: total,
-                paidAmount: paid,
-                nextPaymentAt: new Date(payNextDate).toISOString(),
-              });
-            }
-            toast.success(payMode === "full" ? "To'lov qayd etildi — to'liq to'landi" : "To'lov qayd etildi — qisman to'landi");
-          } catch (payErr: any) {
-            toast.warning("Chiqim saqlandi, lekin to'lovni yozishda xatolik: " + (payErr?.message || ""));
-          }
-        }
-      }
 
       toast.success("Chiqim saqlandi");
       setSelectedDispatchClientCode(null);
@@ -3684,81 +3668,28 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
                                     </div>
                                   )}
 
-                                  {/* ── TO'LOV MA'LUMOTLARI — «Mijozlar» bo'limidagi tayyor to'lov
-                                       tizimiga yoziladi (Sotildi to'liq / qisman to'ladi) ── */}
-                                  {chiqimType === "client" && paymentsEnabled && (
-                                    <div className="bg-white rounded-xl border-2 border-emerald-100 p-3 space-y-2" onClick={e => e.stopPropagation()}>
-                                      <p className="text-[10px] font-black text-emerald-700 uppercase tracking-wider">To'lov ma'lumotlari</p>
-                                      <div className="flex gap-1.5">
-                                        {([
-                                          { key: "none",    label: "To'lovsiz" },
-                                          { key: "full",    label: "To'liq to'ladi" },
-                                          { key: "partial", label: "Qisman to'ladi" },
-                                        ] as const).map(opt => (
-                                          <button
-                                            key={opt.key}
-                                            onClick={() => setPayMode(opt.key)}
-                                            className={`flex-1 py-2 rounded-lg text-[11px] font-black border transition-all ${
-                                              payMode === opt.key
-                                                ? opt.key === "none"
-                                                  ? "bg-gray-500 border-gray-500 text-white"
-                                                  : "bg-emerald-600 border-emerald-600 text-white shadow-sm shadow-emerald-200"
-                                                : "bg-white border-gray-200 text-gray-500 hover:border-emerald-300 hover:text-emerald-600"
-                                            }`}
-                                          >
-                                            {opt.label}
-                                          </button>
-                                        ))}
-                                      </div>
-
-                                      {payMode !== "none" && (
-                                        <div className="space-y-2">
-                                          <div>
-                                            <label className="text-[10px] font-bold text-gray-500">Jami summa (so'm) <span className="text-destructive">*</span></label>
-                                            <input
-                                              type="number" onWheel={noWheel} min="0" step="any"
-                                              value={payTotal}
-                                              onChange={e => setPayTotal(e.target.value)}
-                                              placeholder="0"
-                                              className="w-full mt-1 px-3 py-2 rounded-lg border border-emerald-200 bg-white text-sm font-bold focus:outline-none focus:border-emerald-400"
-                                            />
-                                          </div>
-                                          {payMode === "partial" && (
-                                            <>
-                                              <div>
-                                                <label className="text-[10px] font-bold text-gray-500">To'langan summa (so'm) <span className="text-destructive">*</span></label>
-                                                <input
-                                                  type="number" onWheel={noWheel} min="0" step="any"
-                                                  value={payPaid}
-                                                  onChange={e => setPayPaid(e.target.value)}
-                                                  placeholder="0"
-                                                  className="w-full mt-1 px-3 py-2 rounded-lg border border-emerald-200 bg-white text-sm font-bold focus:outline-none focus:border-emerald-400"
-                                                />
-                                              </div>
-                                              <div>
-                                                <label className="text-[10px] font-bold text-gray-500">Keyingi to'lov sanasi <span className="text-destructive">*</span></label>
-                                                <input
-                                                  type="date"
-                                                  value={payNextDate}
-                                                  onChange={e => setPayNextDate(e.target.value)}
-                                                  min={new Date().toISOString().slice(0, 10)}
-                                                  className="w-full mt-1 px-3 py-2 rounded-lg border border-emerald-200 bg-white text-sm focus:outline-none focus:border-emerald-400"
-                                                />
-                                              </div>
-                                              {parseFloat(payTotal || "0") > 0 && parseFloat(payPaid || "0") > 0 && parseFloat(payPaid) < parseFloat(payTotal) && (
-                                                <p className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-100 rounded-md px-2 py-1.5">
-                                                  Qarz: {fmtSum(parseFloat(payTotal) - parseFloat(payPaid))} so'm
-                                                </p>
-                                              )}
-                                            </>
-                                          )}
-                                          <p className="text-[9px] text-gray-400">
-                                            To'lov «Mijozlar» bo'limidagi mijoz kartasiga yoziladi — Sotildi{payMode === "partial" ? " (qisman to'ladi), eslatma tizimi ishga tushadi" : " (to'liq)"}
-                                          </p>
+                                  {/* ── SOTUV / TO'LOV — «Mijozlar» bo'limidagi TO'LIQ funksional
+                                       sotuv bloki (ClientSalePanel). Sotuv mijoz kartasiga yoziladi
+                                       → statistikaga avtomatik tushadi. ── */}
+                                  {chiqimType === "client" && paymentsEnabled && (() => {
+                                    const saleClient = selectedDispatchClientCode ? crmClientByCode(selectedDispatchClientCode) : null;
+                                    if (saleClient) {
+                                      return (
+                                        <div onClick={e => e.stopPropagation()}>
+                                          <ClientSalePanel client={saleClient} onRefresh={refresh} />
                                         </div>
-                                      )}
-                                    </div>
-                                  )}
+                                      );
+                                    }
+                                    return (
+                                      <div
+                                        className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-[11px] font-bold text-amber-700"
+                                        onClick={e => e.stopPropagation()}
+                                      >
+                                        To'lov/sotuv qismi uchun bu mijoz «Mijozlar» bo'limida topilmadi
+                                        {selectedDispatchClientCode ? ` (ID: ${selectedDispatchClientCode})` : ""}. Avval mijozga ID biriktiring.
+                                      </div>
+                                    );
+                                  })()}
 
                                   {/* Note */}
                                   <div onClick={e => e.stopPropagation()}>
@@ -3813,16 +3744,28 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
                                   )}
 
                                   {/* Save / Transfer button */}
-                                  {chiqimType === "client" ? (
-                                    <button
-                                      onClick={e => { e.stopPropagation(); handleSaveDispatch(); }}
-                                      disabled={dispatchSaving || (dispatchMode === "partial" && parseFloat(dispatchPartialQty || "0") <= 0)}
-                                      className="w-full py-3 rounded-xl bg-[#005AB5] text-white text-sm font-black hover:bg-[#004A96] disabled:opacity-40 transition-all shadow-md shadow-blue-200 flex items-center justify-center gap-2"
-                                    >
-                                      <ArrowUpCircle className="w-4 h-4" />
-                                      {dispatchSaving ? "Saqlanmoqda..." : "Chiqimni saqlash"}
-                                    </button>
-                                  ) : (
+                                  {chiqimType === "client" ? (() => {
+                                    const sc = selectedDispatchClientCode ? crmClientByCode(selectedDispatchClientCode) : null;
+                                    const saleDone = (sc?.sale?.status ?? "none") !== "none";
+                                    const blockedByPayment = paymentsEnabled && !saleDone;
+                                    return (
+                                      <>
+                                        {blockedByPayment && (
+                                          <p className="text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 -mb-1" onClick={e => e.stopPropagation()}>
+                                            ⚠ To'lovsiz chiqim mumkin emas — avval yuqoridagi «Sotuv» bo'limida to'lovni rasmiylashtiring.
+                                          </p>
+                                        )}
+                                        <button
+                                          onClick={e => { e.stopPropagation(); handleSaveDispatch(); }}
+                                          disabled={dispatchSaving || blockedByPayment || (dispatchMode === "partial" && parseFloat(dispatchPartialQty || "0") <= 0)}
+                                          className="w-full py-3 rounded-xl bg-[#005AB5] text-white text-sm font-black hover:bg-[#004A96] disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-md shadow-blue-200 flex items-center justify-center gap-2"
+                                        >
+                                          <ArrowUpCircle className="w-4 h-4" />
+                                          {dispatchSaving ? "Saqlanmoqda..." : "Chiqimni saqlash"}
+                                        </button>
+                                      </>
+                                    );
+                                  })() : (
                                     <button
                                       onClick={e => { e.stopPropagation(); handleSaveTransfer(); }}
                                       disabled={transferSaving || !selectedTransferDestId || (dispatchMode === "partial" && parseFloat(dispatchPartialQty || "0") <= 0)}

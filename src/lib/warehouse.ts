@@ -1,7 +1,5 @@
 import { api } from "./api/client";
 
-const KEY = "crm_warehouses";
-
 export type WarehouseType = "china" | "uzbekistan" | "chegara" | "ortaOmbor" | "ortaMijoz";
 
 export interface Warehouse {
@@ -35,54 +33,6 @@ export async function deleteWarehouse(id: string): Promise<void> {
   await api(`/warehouses/${id}`, {
     method: "DELETE"
   });
-}
-
-// --- Kirim / Chiqim entries ---
-
-export interface WarehouseEntry {
-  id: string;
-  warehouseId: string;
-  type: "kirim" | "chiqim";
-  productName: string;
-  quantity: number;
-  unit: string;
-  note?: string;
-  createdAt: string;
-}
-
-const ENTRIES_KEY = "crm_warehouse_entries";
-
-function getAllEntries(): WarehouseEntry[] {
-  try {
-    const raw = localStorage.getItem(ENTRIES_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function persistEntries(entries: WarehouseEntry[]): void {
-  localStorage.setItem(ENTRIES_KEY, JSON.stringify(entries));
-}
-
-export function getWarehouseEntries(warehouseId: string): WarehouseEntry[] {
-  return getAllEntries().filter(e => e.warehouseId === warehouseId);
-}
-
-export function addWarehouseEntry(data: Omit<WarehouseEntry, "id" | "createdAt">): WarehouseEntry {
-  const all = getAllEntries();
-  const entry: WarehouseEntry = {
-    id: crypto.randomUUID(),
-    createdAt: new Date().toISOString(),
-    ...data,
-  };
-  all.push(entry);
-  persistEntries(all);
-  return entry;
-}
-
-export function deleteWarehouseEntry(id: string): void {
-  persistEntries(getAllEntries().filter(e => e.id !== id));
 }
 
 // --- Kirim wizard records ---

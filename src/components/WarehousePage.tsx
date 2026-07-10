@@ -12,10 +12,12 @@ import {
   Shield,
   Warehouse as WarehouseIcon,
   Users,
+  Truck,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ConfirmModal } from "@/components/ConfirmModal";
 import { WarehouseDetailModal } from "@/components/WarehouseDetailModal";
+import { InTransitCargoPanel } from "@/components/InTransitCargoPanel";
 import {
   getWarehouses,
   createWarehouse,
@@ -24,6 +26,7 @@ import {
   type Warehouse,
   type WarehouseType,
 } from "@/lib/warehouse";
+import { getInTransitCargo } from "@/lib/warehouse-transit";
 
 
 const WAREHOUSE_TYPE_META: Record<WarehouseType, { badge: string; icon: typeof Globe; wrap: string; text: string }> = {
@@ -46,10 +49,23 @@ export function WarehousePage() {
   const [formDescription, setFormDescription] = useState("");
   const [formType, setFormType] = useState<WarehouseType>("china");
 
+  const [showTransit, setShowTransit] = useState(false);
+  const [transitCount, setTransitCount] = useState<number | null>(null);
+
   const refresh = async () => setWarehouses(await getWarehouses());
+
+  const refreshTransitCount = async () => {
+    try {
+      const data = await getInTransitCargo();
+      setTransitCount(data.totals.trucks);
+    } catch {
+      /* jimgina — sanoq bo'lmasa tugma baribir ishlaydi */
+    }
+  };
 
   useEffect(() => {
     refresh();
+    refreshTransitCount();
   }, []);
 
   const openCreate = () => {
@@ -129,6 +145,17 @@ export function WarehousePage() {
             className="p-4 rounded-2xl border border-border bg-card text-muted-foreground hover:text-primary hover:border-primary/40 hover:shadow-sm transition-all active:scale-95"
           >
             <RefreshCw className="w-6 h-6" />
+          </button>
+          <button
+            onClick={() => setShowTransit(true)}
+            className="relative inline-flex items-center gap-2.5 px-6 py-4 rounded-2xl border border-violet-300 bg-violet-50 text-violet-700 font-black hover:bg-violet-100 hover:border-violet-400 active:scale-[0.98] transition-all"
+          >
+            <Truck className="w-6 h-6" /> Yo'ldagi yuklar
+            {transitCount !== null && transitCount > 0 && (
+              <span className="ml-0.5 inline-flex items-center justify-center min-w-6 h-6 px-1.5 rounded-full bg-violet-600 text-white text-xs font-black">
+                {transitCount}
+              </span>
+            )}
           </button>
           <button
             onClick={openCreate}
@@ -373,7 +400,19 @@ export function WarehousePage() {
       {selectedWarehouse && (
         <WarehouseDetailModal
           warehouse={selectedWarehouse}
-          onClose={() => setSelectedWarehouse(null)}
+          onClose={() => {
+            setSelectedWarehouse(null);
+            refreshTransitCount();
+          }}
+        />
+      )}
+
+      {showTransit && (
+        <InTransitCargoPanel
+          onClose={() => {
+            setShowTransit(false);
+            refreshTransitCount();
+          }}
         />
       )}
     </div>
