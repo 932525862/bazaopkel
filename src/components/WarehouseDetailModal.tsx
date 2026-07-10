@@ -4,7 +4,7 @@ import {
   MapPin, User, FileText, ChevronDown, ChevronUp, ExternalLink, Clock,
   Search, Truck, Camera, X as XIcon, CheckSquare, Square, Scale, IdCard,
   Building2, Globe, ImageIcon, Shield, Pencil, Check, Warehouse as WarehouseIcon,
-  Lock,
+  Lock, AlertTriangle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { getStoredClientIds } from "@/lib/client-ids";
@@ -530,6 +530,10 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
   const [crModes, setCrModes] = useState<Record<string, "full" | "partial">>({});
   const [crPartials, setCrPartials] = useState<Record<string, { qty: string; unit: string }>>({});
   const [receiptNote, setReceiptNote] = useState("");
+  // ── ZARARLANGAN TOVARLAR (ixtiyoriy) — faqat zarar bo'lganda ochiladi.
+  // 100% butun yuk qabul qilinsa bu blok umuman ishlatilmaydi.
+  const [damageEnabled, setDamageEnabled] = useState(false);
+  const [crDamages, setCrDamages] = useState<Record<string, { qty: string; note: string }>>({});
   const [receiptSaving, setReceiptSaving] = useState(false);
   const [deleteReceiptId, setDeleteReceiptId] = useState<string | null>(null);
 
@@ -1780,7 +1784,7 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
 
   // ── UZB Truck Reception handlers ──────────────────────
   const handleSelectVehicle = (v: string) => {
-    const reset = () => { setVehicleMode("full"); setSelectedClientIds(new Set()); setCrModes({}); setCrPartials({}); setCrForwards({}); };
+    const reset = () => { setVehicleMode("full"); setSelectedClientIds(new Set()); setCrModes({}); setCrPartials({}); setCrForwards({}); setDamageEnabled(false); setCrDamages({}); };
     if (selectedVehicle === v) { setSelectedVehicle(null); reset(); }
     else { setSelectedVehicle(v); reset(); }
   };
@@ -1826,6 +1830,45 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
         }
       }
     }
+
+    // ── ZARARLANGAN TOVARLAR (ixtiyoriy) — kiritilgan bo'lsa tekshirib yig'amiz ──
+    const damages: { chiqimRecordId: string; quantity: number; unit: string; note: string }[] = [];
+    if (damageEnabled) {
+      for (const cr of eligible) {
+        const d = crDamages[cr.id];
+        const qtyStr = (d?.qty ?? "").trim();
+        const noteStr = (d?.note ?? "").trim();
+        if (!qtyStr && !noteStr) continue; // bu yuk uchun zarar kiritilmagan — o'tkazib yuboramiz
+        const qty = parseFloat(qtyStr || "0");
+        if (!(qty > 0)) {
+          toast.error(`${cr.clientName || cr.clientCode}: zararlangan miqdorni (dona) kiriting`);
+          return;
+        }
+        // Yukdagi jami soni (dona) dan oshib ketmasin
+        let totalSoni = 0;
+        for (const pid of cr.selectedProductIds) {
+          const p = globalProductMap[pid];
+          if (!p) continue;
+          const share = cr.productRatios?.[pid] ?? 1;
+          totalSoni += (parseFloat(p.quantity) || 0) * share;
+        }
+        totalSoni = Math.round(totalSoni);
+        if (totalSoni > 0 && qty > totalSoni) {
+          toast.error(`${cr.clientName || cr.clientCode}: zarar miqdori (${qty}) yukdagi jami sonidan (${totalSoni} dona) oshib ketdi`);
+          return;
+        }
+        if (!noteStr) {
+          toast.error(`${cr.clientName || cr.clientCode}: zarar sababini yozing — to'liq ma'lumot majburiy`);
+          return;
+        }
+        damages.push({ chiqimRecordId: cr.id, quantity: qty, unit: "dona", note: noteStr });
+      }
+      if (damages.length === 0) {
+        toast.error("«Zararlangan tovar bor» yoqilgan, lekin hech narsa kiritilmadi. Kiriting yoki blokni o'chiring.");
+        return;
+      }
+    }
+
     setReceiptSaving(true);
     try {
       const receivedRatios: Record<string, number> = {};
@@ -1862,9 +1905,12 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
         forwards,
         note: receiptNote.trim() || undefined,
         receivedAt: new Date().toISOString().slice(0, 10),
+        damages: damages.length > 0 ? damages : undefined,
       });
-      toast.success("Fura qabul qilindi");
-      setSelectedVehicle(null); setVehicleMode("full"); setSelectedClientIds(new Set()); setCrModes({}); setCrPartials({}); setCrForwards({}); setReceiptNote("");
+      toast.success(damages.length > 0
+        ? `Fura qabul qilindi — ${damages.reduce((s, d) => s + d.quantity, 0)} dona zarar qayd etildi`
+        : "Fura qabul qilindi");
+      setSelectedVehicle(null); setVehicleMode("full"); setSelectedClientIds(new Set()); setCrModes({}); setCrPartials({}); setCrForwards({}); setReceiptNote(""); setDamageEnabled(false); setCrDamages({});
       setShowUzbKirimPanel(false);
       await refresh();
     } catch (err: any) {
@@ -1880,6 +1926,104 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
     toast.success("O'chirildi");
     setDeleteReceiptId(null);
     await refresh();
+  };
+
+  /**
+   * ZARARLANGAN TOVARLAR bloki — fura qabul qilishda IXTIYORIY.
+   * Yuk 100% butun bo'lsa bu blok yopiq turadi va oqimga umuman aralashmaydi.
+   * Zarar bo'lganda ochilib, har bir yuk (mijoz) bo'yicha miqdor + sabab kiritiladi.
+   * Ma'lumot to'liq kontekst bilan saqlanadi va "Zararlangan yuklar" bo'limida ko'rinadi.
+   */
+  const renderDamageSection = () => {
+    if (!selectedVehicle) return null;
+    const eligible = vehicleMode === "full"
+      ? selectedTruckChiqims
+      : selectedTruckChiqims.filter(cr => selectedClientIds.has(cr.id));
+    if (eligible.length === 0) return null;
+    const totalDamaged = eligible.reduce((s, cr) => s + (parseFloat(crDamages[cr.id]?.qty || "0") || 0), 0);
+    return (
+      <div className="mx-3 mb-3">
+        {!damageEnabled ? (
+          <button
+            onClick={() => setDamageEnabled(true)}
+            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 border-dashed border-amber-300 bg-amber-50/50 text-amber-700 text-xs font-black hover:bg-amber-100/60 transition-colors"
+          >
+            <AlertTriangle className="w-4 h-4" />
+            Zararlangan tovar bor (ixtiyoriy)
+          </button>
+        ) : (
+          <div className="rounded-2xl border-2 border-amber-200 bg-white overflow-hidden shadow-sm">
+            <div className="flex items-center gap-2 px-4 py-2.5 bg-amber-50 border-b border-amber-200">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-[11px] font-black text-amber-800 uppercase tracking-wider">Zararlangan tovarlar</p>
+                <p className="text-[10px] text-amber-700/70">Faqat zarari bor yukni to'ldiring — qolganini bo'sh qoldiring</p>
+              </div>
+              {totalDamaged > 0 && (
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 shrink-0">
+                  Jami: {Math.round(totalDamaged * 100) / 100} dona
+                </span>
+              )}
+              <button
+                onClick={() => { setDamageEnabled(false); setCrDamages({}); }}
+                className="p-1 rounded-lg hover:bg-amber-100 text-amber-600 transition-colors shrink-0"
+                title="Blokni o'chirish (zarar yozilmaydi)"
+              >
+                <XIcon className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="divide-y divide-amber-100">
+              {eligible.map(cr => {
+                const d = crDamages[cr.id];
+                // Yukdagi jami soni (dona) — max chegara sifatida ko'rsatiladi
+                let totalSoni = 0;
+                for (const pid of cr.selectedProductIds) {
+                  const p = globalProductMap[pid];
+                  if (!p) continue;
+                  const share = cr.productRatios?.[pid] ?? 1;
+                  totalSoni += (parseFloat(p.quantity) || 0) * share;
+                }
+                totalSoni = Math.round(totalSoni);
+                const hasDamage = !!(d?.qty && parseFloat(d.qty) > 0);
+                return (
+                  <div key={cr.id} className={`px-4 py-2.5 space-y-1.5 ${hasDamage ? "bg-amber-50/50" : ""}`}>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-black px-1.5 py-0.5 rounded font-mono text-amber-700 bg-amber-100">
+                        {cr.clientCode}
+                      </span>
+                      <span className="text-[11px] text-[#6B7280] font-medium flex-1 truncate">
+                        {cr.clientName || cr.clientCode}
+                      </span>
+                      {totalSoni > 0 && (
+                        <span className="text-[9px] text-[#9CA3AF] font-bold shrink-0">jami {totalSoni} dona</span>
+                      )}
+                    </div>
+                    <div className="flex gap-1.5">
+                      <input
+                        type="number" min="0" step="any"
+                        value={d?.qty ?? ""}
+                        onChange={e => setCrDamages(m => ({ ...m, [cr.id]: { qty: e.target.value, note: m[cr.id]?.note ?? "" } }))}
+                        placeholder="Zarar (dona)"
+                        className="w-28 px-3 py-2 rounded-lg border border-amber-200 bg-white text-xs font-bold text-[#374151] focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-400 placeholder:text-[#C4C9D4]"
+                      />
+                      <input
+                        value={d?.note ?? ""}
+                        onChange={e => setCrDamages(m => ({ ...m, [cr.id]: { qty: m[cr.id]?.qty ?? "", note: e.target.value } }))}
+                        placeholder="Zarar sababi/tavsifi (majburiy)..."
+                        className="flex-1 px-3 py-2 rounded-lg border border-amber-200 bg-white text-xs font-medium text-[#374151] focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-400 placeholder:text-[#C4C9D4]"
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="px-4 py-2 text-[9px] text-amber-700/60 bg-amber-50/50 border-t border-amber-100">
+              Zarar yozuvlari o'chirib bo'lmaydigan tarixga yoziladi va «Yo'ldagi yuklar → Zararlangan yuklar» bo'limida to'liq ko'rinadi.
+            </p>
+          </div>
+        )}
+      </div>
+    );
   };
 
   // ── UZB Dispatch handlers ─────────────────────────────
@@ -2895,6 +3039,9 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
                         </div>
                       </div>
                     )}
+
+                    {/* Zararlangan tovarlar (ixtiyoriy) */}
+                    {renderDamageSection()}
 
                     {/* Note + Save */}
                     {selectedVehicle && (
@@ -4346,6 +4493,8 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
                       </div>
                     </div>
                   )}
+                  {/* Zararlangan tovarlar (ixtiyoriy) */}
+                  {renderDamageSection()}
                   {selectedVehicle && (
                     <div className="mx-3 mb-4 space-y-2">
                       <input value={receiptNote} onChange={e => setReceiptNote(e.target.value)}

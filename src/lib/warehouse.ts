@@ -252,6 +252,14 @@ export interface ChiqimReceipt {
   createdAt: string;
 }
 
+/** Qabul paytida kiritilgan zararlangan tovar (bitta yuk bo'yicha) */
+export interface ReceiptDamageItem {
+  chiqimRecordId: string;
+  quantity: number;
+  unit?: string;
+  note: string;
+}
+
 /** Barcha omborlardagi fura qabul yozuvlari — statuslarni hisoblash uchun */
 export async function getAllReceiptsGlobal(): Promise<ChiqimReceipt[]> {
   return await api<ChiqimReceipt[]>("/warehouses/receipts/all");
@@ -261,7 +269,9 @@ export async function getChiqimReceipts(uzbWarehouseId: string): Promise<ChiqimR
   return await api<ChiqimReceipt[]>(`/warehouses/${uzbWarehouseId}/receipts`);
 }
 
-export async function addChiqimReceipt(data: Omit<ChiqimReceipt, "id" | "createdAt">): Promise<ChiqimReceipt> {
+export async function addChiqimReceipt(
+  data: Omit<ChiqimReceipt, "id" | "createdAt"> & { damages?: ReceiptDamageItem[] },
+): Promise<ChiqimReceipt> {
   return await api<ChiqimReceipt>(`/warehouses/${data.uzbWarehouseId}/receipts`, {
     method: "POST",
     json: {
@@ -270,8 +280,38 @@ export async function addChiqimReceipt(data: Omit<ChiqimReceipt, "id" | "created
       forwards: data.forwards ?? {},
       note: data.note,
       receivedAt: data.receivedAt,
+      // Faqat zarar bo'lganda yuboriladi — 100% butun yuklarda umuman qatnashmaydi
+      ...(data.damages && data.damages.length > 0 ? { damages: data.damages } : {}),
     },
   });
+}
+
+// ─── ZARARLANGAN TOVARLAR — qabul paytida qayd etilgan zarar tarixi ───
+
+export interface WarehouseDamageEntry {
+  id: string;
+  warehouseId: string;
+  warehouseName: string;
+  sourceWarehouseId?: string | null;
+  sourceWarehouseName?: string | null;
+  receiptId?: string | null;
+  chiqimRecordId?: string | null;
+  vehicleNumber: string;
+  clientCode: string;
+  clientName?: string | null;
+  products: Array<{ name: string; sharePercent?: number; joys?: number; quantity?: number; bruttoKg?: number; volumeM3?: number }>;
+  cargoTotals: { joys?: number; quantity?: number; bruttoKg?: number; volumeM3?: number };
+  quantity: number | string;
+  unit: string;
+  note: string;
+  receivedAt: string;
+  createdById?: string | null;
+  createdByName?: string | null;
+  createdAt: string;
+}
+
+export async function getAllWarehouseDamages(): Promise<WarehouseDamageEntry[]> {
+  return await api<WarehouseDamageEntry[]>("/warehouses/damages/all");
 }
 
 export async function deleteChiqimReceipt(id: string): Promise<void> {

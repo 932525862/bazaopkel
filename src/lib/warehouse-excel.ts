@@ -1,6 +1,6 @@
 // Ombor arxividagi kirim/chiqim yozuvlarini Excel (.xlsx) ga eksport qilish.
 import { downloadXlsx, type SheetData, type CellValue } from "./xlsx-export";
-import type { WarehouseArchiveEntry } from "./warehouse";
+import type { WarehouseArchiveEntry, WarehouseDamageEntry } from "./warehouse";
 
 // Panel filtrlaridagi hodisa turlari bilan bir xil guruhlash
 export const KIRIM_EVENTS = ["KIRIM_CREATED", "TRUCK_RECEIVED", "TRUCK_PARTIAL_RECEIVED", "TRANSFER_RECEIVED"];
@@ -178,6 +178,48 @@ export function exportWarehouseSelected(warehouseName: string, selectedEntries: 
   const sheet: SheetData = { name: "Tanlangan", rows };
   downloadXlsx(`${safeFile(warehouseName)}_tanlangan_${today()}.xlsx`, [sheet]);
   return selectedEntries.length;
+}
+
+// ══════════════════════════════════════════════════════════════
+// ZARARLANGAN YUKLAR — .xlsx eksport (to'liq ma'lumot bilan)
+// ══════════════════════════════════════════════════════════════
+
+const DAMAGE_HEADERS = [
+  "Qabul sanasi", "Qayd vaqti", "Fura", "Mijoz kodi", "Mijoz ismi",
+  "Manba ombor", "Qabul ombori", "Zarar (dona)",
+  "Yukdagi jami (dona)", "Yuk joy", "Yuk brutto (kg)", "Yuk hajm (m³)",
+  "Tovarlar", "Zarar sababi", "Kim qayd etdi",
+];
+
+/** Zarar yozuvlarini .xlsx qilib yuklab olish (tanlanganlar yoki hammasi) */
+export function exportDamagesExcel(entries: WarehouseDamageEntry[], label: string = "zararlangan_yuklar"): number {
+  const rows: CellValue[][] = [DAMAGE_HEADERS];
+  let totalDamaged = 0;
+
+  const sorted = [...entries].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  for (const e of sorted) {
+    const t = e.cargoTotals ?? {};
+    const qty = num(e.quantity);
+    if (typeof qty === "number") totalDamaged += qty;
+    const productsText = (e.products ?? [])
+      .map(p => `${p.name}${typeof p.quantity === "number" ? ` (${Math.round(p.quantity)} dona)` : ""}`)
+      .join("; ");
+    rows.push([
+      fmtDate(String(e.receivedAt)), fmtTime(e.createdAt), e.vehicleNumber ?? "",
+      e.clientCode ?? "", e.clientName ?? "",
+      e.sourceWarehouseName ?? "", e.warehouseName ?? "",
+      qty,
+      num(t.quantity), num(t.joys), num(t.bruttoKg), num(t.volumeM3),
+      productsText, e.note ?? "", e.createdByName ?? "",
+    ]);
+  }
+
+  rows.push([]);
+  rows.push(["", "", "JAMI", "", "", "", "", Math.round(totalDamaged * 100) / 100, "", "", "", "", "", "", ""]);
+
+  const sheet: SheetData = { name: "Zararlangan yuklar", rows };
+  downloadXlsx(`${safeFile(label)}_${today()}.xlsx`, [sheet]);
+  return entries.length;
 }
 
 /** Ikkalasi bitta faylda — Kirim va Chiqim alohida varaqlarda */

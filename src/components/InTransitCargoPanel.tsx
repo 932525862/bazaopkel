@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ChevronLeft, ChevronDown, Truck, Search, Package, MapPin, ArrowRight, RefreshCw,
-  Building2, IdCard, Camera, Clock, Boxes, Layers,
+  Building2, IdCard, Camera, Clock, Boxes, Layers, AlertTriangle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { getInTransitCargo, type TransitCargo, type TransitData } from "@/lib/warehouse-transit";
+import { DamagedCargoPanel } from "@/components/DamagedCargoPanel";
 
 interface Props {
   onClose: () => void;
@@ -30,6 +31,8 @@ export function InTransitCargoPanel({ onClose }: Props) {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<string>("all");
   const [destId, setDestId] = useState<string>("all");
+  // Zararlangan yuklar bo'limi (alohida to'liq ekran)
+  const [showDamaged, setShowDamaged] = useState(false);
 
   // Manzil bo'yicha guruhlar — sig'ib ketmasligi uchun standart holatda yig'ilgan
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -147,6 +150,12 @@ export function InTransitCargoPanel({ onClose }: Props) {
           </p>
         </div>
         <button
+          onClick={() => setShowDamaged(true)}
+          className="flex items-center gap-2 px-3.5 py-2 rounded-xl border border-amber-300 bg-amber-50 text-sm font-black text-amber-700 hover:bg-amber-100 transition-colors"
+        >
+          <AlertTriangle className="w-4 h-4" /> Zararlangan yuklar
+        </button>
+        <button
           onClick={load}
           disabled={loading}
           className="flex items-center gap-2 px-3.5 py-2 rounded-xl border border-border bg-card text-sm font-bold text-muted-foreground hover:text-primary hover:border-primary/40 disabled:opacity-50 transition-colors"
@@ -154,6 +163,9 @@ export function InTransitCargoPanel({ onClose }: Props) {
           <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} /> Yangilash
         </button>
       </div>
+
+      {/* Zararlangan yuklar bo'limi */}
+      {showDamaged && <DamagedCargoPanel onClose={() => setShowDamaged(false)} />}
 
       {/* Totals bar */}
       <div className="shrink-0 px-5 py-3 bg-white border-b border-[#EEF0F5]">
