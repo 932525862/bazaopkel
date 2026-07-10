@@ -15,10 +15,13 @@ function closeSocket() {
 }
 
 function connectSocket(): Socket {
-  const token = getToken();
   const url = API_URL || (typeof window !== "undefined" ? window.location.origin : "");
   const s = io(url, {
-    auth: { token },
+    // MUHIM: auth funksiya ko'rinishida — har bir (qayta)ulanish urinishida token
+    // localStorage'dan YANGI o'qiladi. Ilgari statik obyekt edi: 15 daqiqalik
+    // access token eskirgach, socket.io reconnect abadiy o'sha ESKI token bilan
+    // urinaverar va server har safar rad etar edi — bildirishnomalar jimgina o'lardi.
+    auth: (cb) => cb({ token: getToken() }),
     transports: ["websocket"],
   });
 
@@ -42,16 +45,38 @@ function connectSocket(): Socket {
   s.on("clientReminder", (data) => notify("clientReminder", data));
   s.on("paymentReminder", (data) => notify("paymentReminder", data));
 
+  // MUHIM: server tomonidan uzilganda ("io server disconnect" — odatda token
+  // eskirgan bo'ladi) socket.io o'zi QAYTA ULANMAYDI. Shu holatni ushlab,
+  // tokenni yangilaymiz va qo'lda qayta ulaymiz — aks holda bildirishnomalar
+  // sahifa yangilanmaguncha butunlay to'xtab qolardi.
+  s.on("disconnect", async (reason) => {
+    if (reason !== "io server disconnect") return; // boshqa sabablarda o'zi qayta ulanadi
+    try {
+      await refreshTokensOnce();
+      if (socket === s && !s.connected) s.connect();
+    } catch {
+      // Refresh ham ishlamadi — sessiya tugagan; keyingi REST chaqiruv logout qiladi.
+    }
+  });
+
   return s;
 }
 
-/** Access token yangilanganda (refresh) ochiq socket ulanishini yangi token bilan
- *  qayta o'rnatadi — aks holda 15 daqiqadan keyin real-vaqt bildirishnomalar
- *  jim tarzda to'xtab qoladi (eski token bilan qayta-qayta ulanishga urinaveradi). */
-function reconnectSocketWithFreshToken() {
-  if (!socket) return;
-  socket.disconnect();
-  socket = connectSocket();
+/** Uzilib qolgan socketni (mavjud bo'lsa) qayta ulaydi.
+ *  Token auth-callback orqali doim localStorage'dan yangi olinadi,
+ *  shuning uchun socketni buzib qayta yaratish shart emas. */
+function ensureSocketConnected() {
+  if (socket && !socket.connected) socket.connect();
+}
+
+// Foydalanuvchi tabga qaytganda / internet tiklanganda uzilgan socketni jonlantiramiz
+// (masalan noutbuk uxlab uyg'onganda). Busiz "jim o'lik" socket bilan qolib ketardi.
+if (typeof window !== "undefined") {
+  window.addEventListener("focus", ensureSocketConnected);
+  window.addEventListener("online", ensureSocketConnected);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) ensureSocketConnected();
+  });
 }
 
 export function apiBase() {
@@ -107,8 +132,23 @@ async function refreshTokens() {
   const data = await res.json();
   setToken(data.accessToken);
   setRefreshToken(data.refreshToken);
-  reconnectSocketWithFreshToken();
+  // Token yangilandi — socket uzilgan bo'lsa qayta ulaymiz (yangi token auth-callback'dan olinadi)
+  ensureSocketConnected();
   return data;
+}
+
+/** Refresh'ni SINGLE-FLIGHT qiladi: REST 401 va socket uzilishi bir vaqtda kelsa,
+ *  ikkita parallel refresh yuborilmaydi. Server refresh tokenni har safar
+ *  aylantirgani (rotate) uchun parallel ikkita so'rovning ikkinchisi doim
+ *  "Invalid session" bilan yiqilib, foydalanuvchini bekorga logout qilib yuborardi. */
+let refreshPromise: Promise<{ accessToken: string; refreshToken: string }> | null = null;
+function refreshTokensOnce() {
+  if (!refreshPromise) {
+    refreshPromise = refreshTokens().finally(() => {
+      refreshPromise = null;
+    });
+  }
+  return refreshPromise;
 }
 
 export async function api<T = unknown>(
@@ -133,7 +173,7 @@ export async function api<T = unknown>(
     if (!isRefreshing) {
       isRefreshing = true;
       try {
-        await refreshTokens();
+        await refreshTokensOnce();
         isRefreshing = false;
         refreshQueue.forEach(cb => cb());
         refreshQueue = [];
@@ -507,6 +547,9 @@ export const API = {
   initSocket: (onEvent: (event: string, data: any) => void) => {
     listeners.add(onEvent);
     if (!socket) socket = connectSocket();
+    // Socket obyekti bor-u, lekin uzilgan bo'lsa (masalan login'dan oldin
+    // tokensiz yaratilib, server rad etgan) — qayta ulaymiz.
+    else if (!socket.connected) socket.connect();
     return () => { listeners.delete(onEvent); };
   },
   disconnectSocket: () => {
