@@ -25,13 +25,51 @@ interface DestGroup {
   items: TransitCargo[];
 }
 
+interface VehicleGroup {
+  vehicleNumber: string;
+  items: TransitCargo[];
+}
+
+// Yuklarni FURA RAQAMI bo'yicha jamlaydi — bitta furada 20-30 ta yuk bo'lsa ham
+// bitta yig'iladigan (dropdown) blok bo'lib ko'rinadi, ro'yxat cho'zilib ketmaydi.
+function groupByVehicle(items: TransitCargo[]): VehicleGroup[] {
+  const map = new Map<string, TransitCargo[]>();
+  for (const c of items) {
+    const vn = c.vehicleNumber || "—";
+    if (!map.has(vn)) map.set(vn, []);
+    map.get(vn)!.push(c);
+  }
+  return Array.from(map.entries()).map(([vehicleNumber, items]) => ({ vehicleNumber, items }));
+}
+
+interface ClientGroup {
+  clientCode: string;
+  clientName: string;
+  items: TransitCargo[];
+}
+
+// Fura ichidagi yuklarni MIJOZ (ID) bo'yicha jamlaydi — bir odamda 20-30 ta yuk
+// bo'lsa ham bitta yig'iladigan (dropdown) qatorga jamlanadi.
+function groupByClient(items: TransitCargo[]): ClientGroup[] {
+  const map = new Map<string, ClientGroup>();
+  for (const c of items) {
+    const key = (c.clientCode || c.clientName || "—").trim();
+    if (!map.has(key)) map.set(key, { clientCode: c.clientCode, clientName: c.clientName, items: [] });
+    map.get(key)!.items.push(c);
+  }
+  return Array.from(map.values());
+}
+
+const r2 = (v: number) => Math.round(v * 100) / 100;
+const r3 = (v: number) => Math.round(v * 1000) / 1000;
+
 export function InTransitCargoPanel({ onClose }: Props) {
   const [data, setData] = useState<TransitData | null>(null);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<string>("all");
   const [destId, setDestId] = useState<string>("all");
-  // Zararlangan yuklar bo'limi (alohida to'liq ekran)
+  // Qabul qilinmagan yuklar bo'limi (alohida to'liq ekran)
   const [showDamaged, setShowDamaged] = useState(false);
 
   // Manzil bo'yicha guruhlar — sig'ib ketmasligi uchun standart holatda yig'ilgan
@@ -49,6 +87,15 @@ export function InTransitCargoPanel({ onClose }: Props) {
     setExpandedCards(prev => {
       const n = new Set(prev);
       if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+
+  // Fura raqami bo'yicha jamlangan bloklar — standart holatda yig'ilgan (dropdown)
+  const [expandedVehicles, setExpandedVehicles] = useState<Set<string>>(new Set());
+  const toggleVehicle = (key: string) =>
+    setExpandedVehicles(prev => {
+      const n = new Set(prev);
+      if (n.has(key)) n.delete(key); else n.add(key);
       return n;
     });
 
@@ -92,16 +139,25 @@ export function InTransitCargoPanel({ onClose }: Props) {
   }, [cargos, query, status, destId]);
 
   const filteredTotals = useMemo(() => {
-    return filtered.reduce(
+    // Yaxlitlash faqat OXIRIDA bir marta — har qadamda yaxlitlash yuzlab
+    // furada xatoni to'playdi (warehouse-transit.ts bilan bir xil yondashuv).
+    const raw = filtered.reduce(
       (a, c) => ({
         trucks: a.trucks + 1,
         soni: a.soni + c.inTransitTotals.soni,
-        joys: Math.round((a.joys + c.inTransitTotals.joys) * 100) / 100,
-        brutto: Math.round((a.brutto + c.inTransitTotals.brutto) * 100) / 100,
-        vol: Math.round((a.vol + c.inTransitTotals.vol) * 1000) / 1000,
+        joys: a.joys + c.inTransitTotals.joys,
+        brutto: a.brutto + c.inTransitTotals.brutto,
+        vol: a.vol + c.inTransitTotals.vol,
       }),
       { trucks: 0, soni: 0, joys: 0, brutto: 0, vol: 0 },
     );
+    return {
+      trucks: raw.trucks,
+      soni: raw.soni,
+      joys: Math.round(raw.joys * 100) / 100,
+      brutto: Math.round(raw.brutto * 100) / 100,
+      vol: Math.round(raw.vol * 1000) / 1000,
+    };
   }, [filtered]);
 
   // Manzil ombor bo'yicha guruhlash — 200-300 ta fura bo'lsa ham tartibli ko'rinishi uchun.
@@ -153,7 +209,7 @@ export function InTransitCargoPanel({ onClose }: Props) {
           onClick={() => setShowDamaged(true)}
           className="flex items-center gap-2 px-3.5 py-2 rounded-xl border border-amber-300 bg-amber-50 text-sm font-black text-amber-700 hover:bg-amber-100 transition-colors"
         >
-          <AlertTriangle className="w-4 h-4" /> Zararlangan yuklar
+          <AlertTriangle className="w-4 h-4" /> Qabul qilinmagan yuklar
         </button>
         <button
           onClick={load}
@@ -164,7 +220,7 @@ export function InTransitCargoPanel({ onClose }: Props) {
         </button>
       </div>
 
-      {/* Zararlangan yuklar bo'limi */}
+      {/* Qabul qilinmagan yuklar bo'limi */}
       {showDamaged && <DamagedCargoPanel onClose={() => setShowDamaged(false)} />}
 
       {/* Totals bar */}
@@ -250,10 +306,20 @@ export function InTransitCargoPanel({ onClose }: Props) {
             <p className="text-xs text-[#C4C9D4] mt-1">Chiqim qilingan, ammo hali qabul qilinmagan yuklar shu yerda ko'rinadi</p>
           </div>
         ) : isSearching ? (
-          // Qidiruv paytida guruhlash chalg'itadi — to'g'ridan-to'g'ri mos kelganlar ro'yxati
-          <div className="max-w-3xl mx-auto rounded-2xl border border-[#DDE1EA] bg-white shadow-sm divide-y divide-[#F1F2F6] overflow-hidden">
-            {filtered.map(c => (
-              <CompactRow key={c.id} c={c} expanded={expandedCards.has(c.id)} onToggle={() => toggleCard(c.id)} fmtDateTime={fmtDateTime} />
+          // Qidiruvda ham fura raqami bo'yicha jamlab ko'rsatamiz — bir fura = bitta blok
+          <div className="max-w-3xl mx-auto space-y-2.5">
+            {groupByVehicle(filtered).map(v => (
+              <VehicleSection
+                key={v.vehicleNumber}
+                vehicleNumber={v.vehicleNumber}
+                items={v.items}
+                expanded={expandedVehicles.has(`search::${v.vehicleNumber}`)}
+                onToggle={() => toggleVehicle(`search::${v.vehicleNumber}`)}
+                expandedCards={expandedCards}
+                onToggleCard={toggleCard}
+                fmtDateTime={fmtDateTime}
+                showDest
+              />
             ))}
           </div>
         ) : (
@@ -264,6 +330,8 @@ export function InTransitCargoPanel({ onClose }: Props) {
                 group={g}
                 expanded={expandedGroups.has(g.destId)}
                 onToggleGroup={() => toggleGroup(g.destId)}
+                expandedVehicles={expandedVehicles}
+                onToggleVehicle={toggleVehicle}
                 expandedCards={expandedCards}
                 onToggleCard={toggleCard}
                 fmtDateTime={fmtDateTime}
@@ -277,16 +345,19 @@ export function InTransitCargoPanel({ onClose }: Props) {
 }
 
 function GroupSection({
-  group, expanded, onToggleGroup, expandedCards, onToggleCard, fmtDateTime,
+  group, expanded, onToggleGroup, expandedVehicles, onToggleVehicle, expandedCards, onToggleCard, fmtDateTime,
 }: {
   group: DestGroup;
   expanded: boolean;
   onToggleGroup: () => void;
+  expandedVehicles: Set<string>;
+  onToggleVehicle: (key: string) => void;
   expandedCards: Set<string>;
   onToggleCard: (id: string) => void;
   fmtDateTime: (s: string) => string;
 }) {
-  const partialCount = group.items.filter(c => c.status === "partial").length;
+  const vehicles = groupByVehicle(group.items);
+  const partialVehicles = vehicles.filter(v => v.items.some(c => c.status === "partial")).length;
   return (
     <div className="bg-white rounded-2xl border border-[#DDE1EA] shadow-sm overflow-hidden">
       <button
@@ -299,15 +370,185 @@ function GroupSection({
         <div className="flex-1 min-w-0">
           <p className="text-sm font-black text-foreground truncate">{group.destName}</p>
           <p className="text-[11px] text-muted-foreground mt-0.5">
-            {group.items.length} ta fura{partialCount > 0 ? ` · ${partialCount} tasi qisman qabul qilingan` : ""}
+            {vehicles.length} ta fura{partialVehicles > 0 ? ` · ${partialVehicles} tasida qisman qabul` : ""}
           </p>
         </div>
         <ChevronDown className={`w-4.5 h-4.5 text-muted-foreground shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`} />
       </button>
       {expanded && (
+        <div className="border-t border-[#EEF0F5] bg-slate-50/40 p-2 space-y-2">
+          {vehicles.map(v => (
+            <VehicleSection
+              key={v.vehicleNumber}
+              vehicleNumber={v.vehicleNumber}
+              items={v.items}
+              expanded={expandedVehicles.has(`${group.destId}::${v.vehicleNumber}`)}
+              onToggle={() => onToggleVehicle(`${group.destId}::${v.vehicleNumber}`)}
+              expandedCards={expandedCards}
+              onToggleCard={onToggleCard}
+              fmtDateTime={fmtDateTime}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Bitta FURA — unga tegishli barcha yuklar (mijozlar) jamlangan yig'iladigan blok.
+ *  Sarlavhada furadagi jami: mijoz, tovar, soni/joy/brutto/hajm (hali yo'ldagi qism). */
+function VehicleSection({
+  vehicleNumber, items, expanded, onToggle, expandedCards, onToggleCard, fmtDateTime, showDest = false,
+}: {
+  vehicleNumber: string;
+  items: TransitCargo[];
+  expanded: boolean;
+  onToggle: () => void;
+  expandedCards: Set<string>;
+  onToggleCard: (id: string) => void;
+  fmtDateTime: (s: string) => string;
+  showDest?: boolean;
+}) {
+  const partialCount = items.filter(c => c.status === "partial").length;
+  const clientCount = new Set(items.map(i => i.clientCode).filter(Boolean)).size;
+  const productCount = items.reduce((s, c) => s + c.products.length, 0);
+  const t = items.reduce(
+    (a, c) => ({
+      soni: a.soni + c.inTransitTotals.soni,
+      joys: a.joys + c.inTransitTotals.joys,
+      brutto: a.brutto + c.inTransitTotals.brutto,
+      vol: a.vol + c.inTransitTotals.vol,
+    }),
+    { soni: 0, joys: 0, brutto: 0, vol: 0 },
+  );
+  const destLabel = showDest
+    ? (() => {
+        const ids = new Set(items.map(i => i.destWarehouseId));
+        if (ids.size === 1) return items[0].destWarehouseName || "Manzil ko'rsatilmagan";
+        return `${ids.size} manzil`;
+      })()
+    : null;
+
+  return (
+    <div className="bg-white rounded-xl border border-[#E3E7F0] overflow-hidden">
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left hover:bg-violet-50/40 transition-colors"
+      >
+        <div className="w-8 h-8 rounded-lg bg-violet-600/10 flex items-center justify-center shrink-0">
+          <Truck className="w-4 h-4 text-violet-600" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-black font-mono text-foreground">{vehicleNumber}</span>
+            <span className="text-[10px] font-bold text-violet-700 bg-violet-50 border border-violet-100 px-1.5 py-0.5 rounded-md">
+              {items.length} yuk
+            </span>
+            {partialCount > 0 && (
+              <span className="text-[10px] font-black px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200">
+                {partialCount} qisman
+              </span>
+            )}
+          </div>
+          <p className="text-[11px] text-muted-foreground mt-0.5 truncate">
+            {destLabel ? <span className="text-violet-600 font-semibold">{destLabel} · </span> : null}
+            {clientCount} mijoz · {productCount} tovar · {r2(t.soni)} dona · {r2(t.joys)} joy · {r2(t.brutto)} kg · {r3(t.vol)} m³
+          </p>
+        </div>
+        <ChevronDown className={`w-4 h-4 text-muted-foreground shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`} />
+      </button>
+      {expanded && (
         <div className="border-t border-[#EEF0F5] divide-y divide-[#F1F2F6]">
-          {group.items.map(c => (
-            <CompactRow key={c.id} c={c} expanded={expandedCards.has(c.id)} onToggle={() => onToggleCard(c.id)} fmtDateTime={fmtDateTime} />
+          {groupByClient(items).map(cl =>
+            cl.items.length > 1 ? (
+              <ClientSection
+                key={`c:${cl.clientCode}:${cl.clientName}`}
+                clientCode={cl.clientCode}
+                clientName={cl.clientName}
+                items={cl.items}
+                expandedCards={expandedCards}
+                onToggleCard={onToggleCard}
+                fmtDateTime={fmtDateTime}
+              />
+            ) : (
+              <CompactRow
+                key={cl.items[0].id}
+                c={cl.items[0]}
+                expanded={expandedCards.has(cl.items[0].id)}
+                onToggle={() => onToggleCard(cl.items[0].id)}
+                fmtDateTime={fmtDateTime}
+                hideVehicle
+              />
+            )
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Bitta MIJOZ (ID) — shu furadagi o'sha mijozning barcha yuklari jamlangan ichki dropdown.
+ *  Bir odamda 20-30 ta yuk bo'lsa ham bitta qatorga yig'iladi, ro'yxat cho'zilmaydi. */
+function ClientSection({
+  clientCode, clientName, items, expandedCards, onToggleCard, fmtDateTime,
+}: {
+  clientCode: string;
+  clientName: string;
+  items: TransitCargo[];
+  expandedCards: Set<string>;
+  onToggleCard: (id: string) => void;
+  fmtDateTime: (s: string) => string;
+}) {
+  const [open, setOpen] = useState(false);
+  const partialCount = items.filter(c => c.status === "partial").length;
+  const productCount = items.reduce((s, c) => s + c.products.length, 0);
+  const t = items.reduce(
+    (a, c) => ({
+      soni: a.soni + c.inTransitTotals.soni,
+      joys: a.joys + c.inTransitTotals.joys,
+      brutto: a.brutto + c.inTransitTotals.brutto,
+      vol: a.vol + c.inTransitTotals.vol,
+    }),
+    { soni: 0, joys: 0, brutto: 0, vol: 0 },
+  );
+  return (
+    <div className="bg-violet-50/20">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center gap-2.5 px-4 py-2.5 text-left hover:bg-violet-50/50 transition-colors"
+      >
+        <span className={`w-2 h-2 rounded-full shrink-0 ${partialCount > 0 ? "bg-amber-500" : "bg-violet-500"}`} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-black font-mono text-violet-700">{clientCode || "—"}</span>
+            {clientName ? <span className="text-xs text-foreground truncate">{clientName}</span> : null}
+            <span className="text-[10px] font-bold text-violet-700 bg-violet-100/70 border border-violet-200 px-1.5 py-0.5 rounded-md">
+              {items.length} yuk
+            </span>
+            {partialCount > 0 && (
+              <span className="text-[10px] font-black px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200">
+                {partialCount} qisman
+              </span>
+            )}
+          </div>
+          <p className="text-[10px] text-muted-foreground mt-0.5 truncate">
+            {productCount} tovar · {r2(t.soni)} dona · {r2(t.joys)} joy · {r2(t.brutto)} kg · {r3(t.vol)} m³
+          </p>
+        </div>
+        <ChevronDown className={`w-4 h-4 text-muted-foreground shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div className="border-t border-[#F1F2F6] divide-y divide-[#F1F2F6] bg-white">
+          {items.map(c => (
+            <CompactRow
+              key={c.id}
+              c={c}
+              expanded={expandedCards.has(c.id)}
+              onToggle={() => onToggleCard(c.id)}
+              fmtDateTime={fmtDateTime}
+              hideVehicle
+              hideClient
+            />
           ))}
         </div>
       )}
@@ -316,14 +557,17 @@ function GroupSection({
 }
 
 function CompactRow({
-  c, expanded, onToggle, fmtDateTime,
+  c, expanded, onToggle, fmtDateTime, hideVehicle = false, hideClient = false,
 }: {
   c: TransitCargo;
   expanded: boolean;
   onToggle: () => void;
   fmtDateTime: (s: string) => string;
+  hideVehicle?: boolean;
+  hideClient?: boolean;
 }) {
   const isPartial = c.status === "partial";
+  const prodPreview = c.products.map(p => p.name).filter(Boolean);
   return (
     <div>
       <button
@@ -331,13 +575,23 @@ function CompactRow({
         className="w-full flex items-center gap-2.5 px-4 py-2.5 text-left hover:bg-slate-50/60 transition-colors"
       >
         <span className={`w-2 h-2 rounded-full shrink-0 ${isPartial ? "bg-amber-500" : "bg-violet-500"}`} />
-        <span className="text-xs font-black font-mono text-foreground shrink-0 w-23 truncate">{c.vehicleNumber}</span>
+        {!hideVehicle && (
+          <span className="text-xs font-black font-mono text-foreground shrink-0 w-23 truncate">{c.vehicleNumber}</span>
+        )}
         <span className="hidden md:flex items-center gap-1 text-[10px] text-muted-foreground shrink-0 w-32 truncate">
           <Building2 className="w-3 h-3 shrink-0" /> {c.sourceWarehouseName}
         </span>
         <span className="flex-1 min-w-0 text-xs text-muted-foreground truncate">
-          <strong className="font-mono text-violet-700">{c.clientCode}</strong>
-          {c.clientName ? <span className="text-foreground"> — {c.clientName}</span> : null}
+          {hideClient ? (
+            <span className="text-foreground">
+              {prodPreview.slice(0, 3).join(", ") || "Yuk"}{prodPreview.length > 3 ? ` +${prodPreview.length - 3}` : ""}
+            </span>
+          ) : (
+            <>
+              <strong className="font-mono text-violet-700">{c.clientCode}</strong>
+              {c.clientName ? <span className="text-foreground"> — {c.clientName}</span> : null}
+            </>
+          )}
         </span>
         {isPartial && (
           <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 shrink-0">
@@ -380,6 +634,26 @@ function CargoDetail({ c, fmtDateTime }: { c: TransitCargo; fmtDateTime: (s: str
         )}
       </div>
       {c.note && <p className="text-[11px] italic text-muted-foreground">Izoh: {c.note}</p>}
+
+      {/* Fura rasmlari (yo'lga chiqqan holati) */}
+      {c.photos && c.photos.length > 0 && (
+        <div>
+          <p className="text-[10px] font-black text-muted-foreground/70 uppercase tracking-wider mb-1 flex items-center gap-1">
+            <Camera className="w-3 h-3" /> Fura rasmi ({c.photos.length})
+          </p>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {c.photos.map((ph, i) => (
+              <img
+                key={i}
+                src={ph.dataUrl}
+                alt={ph.name}
+                onClick={() => window.open(ph.dataUrl, "_blank")}
+                className="w-16 h-16 rounded-lg object-cover shrink-0 border border-border/60 cursor-pointer hover:opacity-90 transition-opacity"
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Products */}
       {c.products.length > 0 && (

@@ -243,8 +243,13 @@ export interface ChiqimReceipt {
   id: string;
   uzbWarehouseId: string;
   vehicleNumber: string;
-  // chiqimRecordId → ratio (1 = full, 0 < x < 1 = partial)
+  // chiqimRecordId → ratio (1 = full, 0 < x < 1 = partial) — umumiy (og'irlikli) ulush
   receivedRatios: Record<string, number>;
+  /**
+   * chiqimRecordId → { productId → ratio }. Tovar-darajali qisman qabul.
+   * Bo'sh/berilmagan bo'lsa (eski yozuvlar) — receivedRatios barcha tovarlarga bir xil qo'llanadi.
+   */
+  receivedProductRatios?: Record<string, Record<string, number>>;
   /** chiqimRecordId → qoldiq yo'naltirilgan ombor id (qisman qabulda) */
   forwards?: Record<string, string>;
   note?: string;
@@ -272,11 +277,16 @@ export async function getChiqimReceipts(uzbWarehouseId: string): Promise<ChiqimR
 export async function addChiqimReceipt(
   data: Omit<ChiqimReceipt, "id" | "createdAt"> & { damages?: ReceiptDamageItem[] },
 ): Promise<ChiqimReceipt> {
-  return await api<ChiqimReceipt>(`/warehouses/${data.uzbWarehouseId}/receipts`, {
+  const url = `/warehouses/${data.uzbWarehouseId}/receipts`;
+  // `receivedProductRatios` (tovar-darajali qabul) DOIM yuboriladi. Ilgari bu
+  // yerda ham maydonsiz "qayta yuborish" bor edi — u qisman qabulda ko'p tovarli
+  // furada qoldiqni buzardi. Endi xato yashirilmaydi.
+  return await api<ChiqimReceipt>(url, {
     method: "POST",
     json: {
       vehicleNumber: data.vehicleNumber,
       receivedRatios: data.receivedRatios,
+      receivedProductRatios: data.receivedProductRatios ?? {},
       forwards: data.forwards ?? {},
       note: data.note,
       receivedAt: data.receivedAt,
@@ -336,7 +346,13 @@ export interface UzbDispatch {
   clientName?: string;
   chiqimRecordIds: string[];
   ratios: Record<string, number>; // chiqimRecordId -> ratio (1 = full)
+  /** chiqimRecordId -> { productId -> ulush } — tovar-darajali chiqim (bo'lmasa ratios qo'llanadi) */
+  productRatios?: Record<string, Record<string, number>>;
   note?: string;
+  /** Fura (avtomobil) raqami — mijozga chiqimda (boshqa omborlar chiqimidagi kabi) */
+  vehicleNumber?: string;
+  /** Fura rasmlari (base64 dataUrl) */
+  photos?: ChiqimPhoto[];
   /** Chiqim paytida kiritilgan to'lov ma'lumoti (snapshot) */
   payment?: DispatchPayment | null;
   dispatchedAt: string;
@@ -348,14 +364,24 @@ export async function getUzbDispatches(uzbWarehouseId: string): Promise<UzbDispa
 }
 
 export async function addUzbDispatch(data: Omit<UzbDispatch, "id" | "createdAt">): Promise<UzbDispatch> {
-  return await api<UzbDispatch>(`/warehouses/${data.uzbWarehouseId}/uzb-dispatches`, {
+  const url = `/warehouses/${data.uzbWarehouseId}/uzb-dispatches`;
+  // MUHIM: `productRatios` (tovar-darajali ulush) DOIM yuboriladi. Ilgari bu yerda
+  // backend xato bersa maydonsiz "qayta yuborish" (fallback) bor edi — u ombor
+  // qoldig'ini BUZAR edi: skalyar ulush ko'p tovarli yozuvning HAMMA tovariga
+  // birdek surtilib, chiqarilmagan tovarlar ham "yarim ketgan" bo'lib ko'rinardi.
+  // Endi xato yashirilmaydi — backend `productRatios`ni qo'llamasa, xato ko'rinadi
+  // (backendni yangilash/migratsiya qilish kerakligi bilinadi), buzuq yozuv saqlanmaydi.
+  return await api<UzbDispatch>(url, {
     method: "POST",
     json: {
       clientCode: data.clientCode,
       clientName: data.clientName,
       chiqimRecordIds: data.chiqimRecordIds,
       ratios: data.ratios,
+      productRatios: data.productRatios ?? {},
       note: data.note,
+      vehicleNumber: data.vehicleNumber ?? null,
+      photos: data.photos ?? [],
       payment: data.payment ?? null,
       dispatchedAt: data.dispatchedAt,
     },
@@ -378,6 +404,8 @@ export interface UzbTransfer {
   clientName?: string;
   chiqimRecordIds: string[];
   ratios: Record<string, number>;
+  /** chiqimRecordId -> { productId -> ulush } — tovar-darajali o'tkazma */
+  productRatios?: Record<string, Record<string, number>>;
   note?: string;
   status?: UzbTransferStatus; // "in_transit" = yo'lda, "received" = qabul qilindi
   transferredAt: string;
@@ -394,7 +422,10 @@ export async function getIncomingUzbTransfers(destWarehouseId: string): Promise<
 }
 
 export async function addUzbTransfer(data: Omit<UzbTransfer, "id" | "createdAt" | "status" | "receivedAt">): Promise<UzbTransfer> {
-  return await api<UzbTransfer>(`/warehouses/${data.sourceWarehouseId}/transfers`, {
+  const url = `/warehouses/${data.sourceWarehouseId}/transfers`;
+  // `productRatios` DOIM yuboriladi (yuqoridagi addUzbDispatch izohiga qarang) —
+  // aks holda manba/manzil omborda qoldiq noto'g'ri hisoblanadi.
+  return await api<UzbTransfer>(url, {
     method: "POST",
     json: {
       destWarehouseId: data.destWarehouseId,
@@ -402,6 +433,7 @@ export async function addUzbTransfer(data: Omit<UzbTransfer, "id" | "createdAt" 
       clientName: data.clientName,
       chiqimRecordIds: data.chiqimRecordIds,
       ratios: data.ratios,
+      productRatios: data.productRatios ?? {},
       note: data.note,
       transferredAt: data.transferredAt,
     },

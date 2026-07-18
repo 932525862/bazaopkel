@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import {
   X, ChevronLeft, ChevronRight, Plus, Trash2,
   User, Users, Upload, ArrowDownCircle, Package, Ruler,
@@ -16,6 +16,7 @@ import {
   type KirimPlace,
   type KirimAttachment,
 } from "@/lib/warehouse";
+import { getTashkentDayjs } from "@/lib/date-utils";
 
 // ─── Constants ────────────────────────────────────────────
 const MEASUREMENT_UNITS = [
@@ -89,6 +90,48 @@ function calcVolume(p: KirimProduct): string {
   return formatM3(unitCube * multiplier);
 }
 
+// Kirim hujjatini o'qiydi. RASM bo'lsa — 1200px gacha kichraytirib, JPEG (0.8) qilib
+// siqadi (katta base64 bilan bazani va so'rovni shishirmaslik uchun). Boshqa fayllar
+// (pdf/doc/xlsx) o'zgarishsiz o'qiladi.
+// Rasm bo'lmagan fayllar (pdf/doc/xlsx) siqilmaydi va base64 holida bazaga
+// yoziladi — juda katta fayl har bir kirim GET'ini og'irlashtiradi. Shu sabab limit.
+const MAX_ATTACHMENT_BYTES = 3 * 1024 * 1024; // 3 MB
+
+function readAttachmentFile(file: File): Promise<KirimAttachment> {
+  return new Promise((resolve, reject) => {
+    if (!file.type.startsWith("image/") && file.size > MAX_ATTACHMENT_BYTES) {
+      reject(new Error(`"${file.name}" juda katta (maks. 3 MB)`));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target?.result as string;
+      if (file.type.startsWith("image/")) {
+        const img = new Image();
+        img.onload = () => {
+          const MAX = 1200;
+          const scale = Math.min(1, MAX / img.width, MAX / img.height);
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.round(img.width * scale);
+          canvas.height = Math.round(img.height * scale);
+          canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
+          const out = canvas.toDataURL("image/jpeg", 0.8);
+          const size = Math.round(((out.length - 22) * 3) / 4); // taxminiy bayt hajmi
+          resolve({ name: file.name, type: "image/jpeg", size, dataUrl: out });
+        };
+        img.onerror = () => resolve({ name: file.name, type: file.type, size: file.size, dataUrl });
+        img.src = dataUrl;
+      } else {
+        resolve({ name: file.name, type: file.type, size: file.size, dataUrl });
+      }
+    };
+    // MUHIM: o'qish xatosida promise osilib qolmasin (ilgari onerror yo'q edi —
+    // Promise.all abadiy kutar, fayllar jimgina qo'shilmay qolardi).
+    reader.onerror = () => reject(new Error(`"${file.name}" faylini o'qib bo'lmadi`));
+    reader.readAsDataURL(file);
+  });
+}
+
 // ─── Section header ───────────────────────────────────────
 function SectionLabel({ icon: Icon, title, required }: {
   icon: React.ComponentType<{ className?: string }>;
@@ -125,7 +168,9 @@ export function WarehouseKirimWizard({ warehouseId, onClose, onSaved }: Props) {
   const { state } = useAppState();
 
   // Step 1 – Sana va Mijoz
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  // Sana TASHKENT (UTC+5) bo'yicha — toISOString() (UTC) 00:00–05:00 orasida
+  // kechagi sanani berar edi.
+  const [date, setDate] = useState(getTashkentDayjs().format("YYYY-MM-DD"));
   const [clientCode, setClientCode] = useState("");
   const [clientName, setClientName] = useState("");
   const [clientPhone, setClientPhone] = useState("");
@@ -141,7 +186,7 @@ export function WarehouseKirimWizard({ warehouseId, onClose, onSaved }: Props) {
   const [selectedEmployeeId, setSelectedEmployeeId] = useState("");
   const [assignedEmployee, setAssignedEmployee] = useState("");
   const [deadline, setDeadline] = useState(
-    new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+    getTashkentDayjs().add(7, "day").format("YYYY-MM-DD"),
   );
   const [notifyAt, setNotifyAt] = useState("09:00");
   const [attachments, setAttachments] = useState<KirimAttachment[]>([]);
@@ -264,24 +309,21 @@ export function WarehouseKirimWizard({ warehouseId, onClose, onSaved }: Props) {
   };
 
   // ── File handler ───────────────────────────────────────
-  const handleFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
-    files.forEach(file => {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        const dataUrl = ev.target?.result as string;
-        setAttachments(prev => [
-          ...prev,
-          { name: file.name, type: file.type, size: file.size, dataUrl },
-        ]);
-      };
-      reader.readAsDataURL(file);
-    });
     e.target.value = "";
+    const results = await Promise.allSettled(files.map(readAttachmentFile));
+    const ok = results.filter((r): r is PromiseFulfilledResult<KirimAttachment> => r.status === "fulfilled").map(r => r.value);
+    const failed = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (ok.length) setAttachments(prev => [...prev, ...ok]);
+    for (const f of failed) toast.error(f.reason?.message || "Fayl o'qib bo'lmadi");
   };
 
   // ── Validation ─────────────────────────────────────────
-  const validateStep1 = () => !!date;
+  // MUHIM: backend clientCode/clientName/clientPhone'ni MAJBURIY talab qiladi
+  // (bo'sh bo'lsa 400 xato). Ilgari UI "ixtiyoriy" deb ko'rsatar va tekshirmas edi —
+  // mijozsiz kirim saqlash doim oxirgi bosqichda yiqilardi.
+  const validateStep1 = () => !!date && !!clientCode.trim() && !!clientName.trim();
   const validateStep2 = () => !!taskDescription.trim();
   const validateProduct = (product: KirimProduct): string | null => {
     if (!product.measurements.some(m => m.value.trim().length > 0))
@@ -319,14 +361,28 @@ export function WarehouseKirimWizard({ warehouseId, onClose, onSaved }: Props) {
     toast.success(`Tovar ${completedProducts.length + 1} qo'shildi`);
   };
 
+  // Topshiriqlar allaqachon yuborilganini eslab qoladi — kirim saqlashda xato
+  // bo'lib QAYTA urinishda hodimlarga topshiriq DUBLIKAT yuborilmasligi uchun.
+  const tasksSentRef = useRef<{ taskApiId?: string } | null>(null);
+
   // ── Save all ───────────────────────────────────────────
   const handleSave = async () => {
-    const hasCurrentData = !!(cur.brutto && parseFloat(cur.brutto) > 0);
+    // Joriy (tugallanmagan) tovar formasi: BIRON ma'lumot kiritilgan bo'lsa —
+    // validatsiyadan o'tishi shart. Ilgari faqat brutto tekshirilar edi: brutto
+    // kiritilmagan tovar hech qanday ogohlantirishsiz JIMGINA tashlab yuborilardi.
+    const curHasAnyData = !!(
+      cur.measurements.some(m => m.value.trim()) ||
+      cur.places.some(pl => parseFloat(pl.count) > 0) ||
+      (cur.quantity && parseFloat(cur.quantity) > 0) ||
+      (cur.brutto && parseFloat(cur.brutto) > 0) ||
+      (cur.netto && parseFloat(cur.netto) > 0) ||
+      cur.note.trim()
+    );
     let allProducts = [...completedProducts];
 
-    if (hasCurrentData) {
+    if (curHasAnyData) {
       const err = validateProduct(cur);
-      if (err) { toast.error(err); return; }
+      if (err) { toast.error("Joriy tovar: " + err); return; }
       allProducts = [...allProducts, { ...cur, totalVolume: volume }];
     }
 
@@ -335,11 +391,20 @@ export function WarehouseKirimWizard({ warehouseId, onClose, onSaved }: Props) {
       return;
     }
 
+    // MUHIM: mijoz maydonlari backendda majburiy — topshiriq yuborishdan OLDIN
+    // tekshiriladi (aks holda topshiriqlar ketib bo'lgach kirim 400 bilan yiqiladi).
+    if (!clientCode.trim() || !clientName.trim()) {
+      toast.error(!clientCode.trim() ? "Mijoz ID raqamini kiriting (1-bosqich)" : "Mijoz topilmadi — 1-bosqichda to'g'ri ID kiriting");
+      setStep(1);
+      return;
+    }
+
     setSaving(true);
     try {
-      // Create API task(s) if employee + task description provided
-      let taskApiId: string | undefined;
-      if (selectedEmployeeId && taskDescription.trim()) {
+      // Create API task(s) if employee + task description provided.
+      // Qayta urinishda (retry) qayta YUBORILMAYDI — tasksSentRef tekshiriladi.
+      let taskApiId: string | undefined = tasksSentRef.current?.taskApiId;
+      if (selectedEmployeeId && taskDescription.trim() && !tasksSentRef.current) {
         try {
           if (selectedEmployeeId === "ALL") {
             // Send task to every active employee
@@ -361,6 +426,7 @@ export function WarehouseKirimWizard({ warehouseId, onClose, onSaved }: Props) {
             } else {
               toast.success(`Topshiriq barcha ${employees.length} ta hodimga yuborildi`);
             }
+            tasksSentRef.current = {};
           } else {
             const result = await API.createTask({
               title: taskDescription.slice(0, 100),
@@ -371,10 +437,11 @@ export function WarehouseKirimWizard({ warehouseId, onClose, onSaved }: Props) {
               endDate: deadline,
             }) as any;
             taskApiId = result?.id || result?.templateId;
+            tasksSentRef.current = { taskApiId };
             toast.success("Topshiriq hodimga yuborildi");
           }
         } catch (err: any) {
-          toast.warning("Kirim saqlandi, lekin topshiriq yuborishda xatolik: " + err.message);
+          toast.warning("Topshiriq yuborishda xatolik: " + err.message);
         }
       }
 
@@ -389,7 +456,9 @@ export function WarehouseKirimWizard({ warehouseId, onClose, onSaved }: Props) {
         date,
         clientCode: clientCode.toUpperCase().trim(),
         clientName,
-        clientPhone,
+        // Backend telefon maydonini ham majburiy talab qiladi — telefoni yo'q
+        // mijozlar uchun "—" yuboriladi (aks holda kirim saqlab bo'lmas edi).
+        clientPhone: clientPhone.trim() || "—",
         taskDescription,
         assignedEmployeeName: empName,
         assignedEmployeeId: (selectedEmployeeId && selectedEmployeeId !== "ALL") ? selectedEmployeeId : undefined,
@@ -412,7 +481,14 @@ export function WarehouseKirimWizard({ warehouseId, onClose, onSaved }: Props) {
 
   // ── Step navigation ────────────────────────────────────
   const goNext = () => {
-    if (step === 1 && !validateStep1()) { toast.error("Sanani kiriting"); return; }
+    if (step === 1 && !validateStep1()) {
+      toast.error(!date
+        ? "Sanani kiriting"
+        : !clientCode.trim()
+          ? "Mijoz ID raqamini kiriting"
+          : "Mijoz topilmadi — to'g'ri ID kiriting");
+      return;
+    }
     if (step === 2 && !validateStep2()) { toast.error("Topshiriq mazmunini kiriting"); return; }
     if (step < 3) setStep(s => s + 1);
   };
@@ -438,7 +514,7 @@ export function WarehouseKirimWizard({ warehouseId, onClose, onSaved }: Props) {
       </div>
       <div>
         <label className="text-xs font-black text-muted-foreground uppercase tracking-wider block mb-1.5">
-          Mijoz ID raqami <span className="text-muted-foreground/60 normal-case font-normal">(ixtiyoriy)</span>
+          Mijoz ID raqami <span className="text-destructive">*</span>
         </label>
         <div className="flex gap-2">
           <input
@@ -600,20 +676,28 @@ export function WarehouseKirimWizard({ warehouseId, onClose, onSaved }: Props) {
       {/* Attachments */}
       <div>
         <label className="text-xs font-black text-muted-foreground uppercase tracking-wider block mb-1.5">
-          Hujjatlar <span className="text-muted-foreground/60 normal-case font-normal">(xlsx, doc, pdf)</span>
+          Hujjatlar <span className="text-muted-foreground/60 normal-case font-normal">(xlsx, doc, pdf, rasm)</span>
         </label>
         <label className="flex items-center gap-3 cursor-pointer w-full px-4 py-3 rounded-xl border-2 border-dashed border-border hover:border-blue-400 text-sm text-muted-foreground hover:text-blue-600 transition-colors">
           <Upload className="w-4 h-4 shrink-0" />
           <span>Fayl tanlash...</span>
-          <input type="file" multiple accept=".xlsx,.xls,.doc,.docx,.pdf" onChange={handleFiles} className="hidden" />
+          <input type="file" multiple accept=".xlsx,.xls,.doc,.docx,.pdf,.png,.jpg,.jpeg,.webp,.gif,image/*" onChange={handleFiles} className="hidden" />
         </label>
         {attachments.length > 0 && (
           <div className="mt-2 space-y-1">
             {attachments.map((f, i) => (
-              <div key={i} className="flex items-center justify-between text-xs bg-secondary/60 rounded-lg px-3 py-1.5">
+              <div key={i} className="flex items-center gap-2 text-xs bg-secondary/60 rounded-lg px-3 py-1.5">
+                {f.type?.startsWith("image/") && f.dataUrl ? (
+                  <img
+                    src={f.dataUrl}
+                    alt={f.name}
+                    onClick={() => window.open(f.dataUrl, "_blank")}
+                    className="w-8 h-8 rounded object-cover border border-border shrink-0 cursor-pointer hover:opacity-90"
+                  />
+                ) : null}
                 <span className="font-medium truncate flex-1">{f.name}</span>
-                <span className="text-muted-foreground/50 mx-2 shrink-0">{(f.size / 1024).toFixed(0)} KB</span>
-                <button onClick={() => setAttachments(p => p.filter((_, j) => j !== i))} className="text-destructive/70 hover:text-destructive">✕</button>
+                <span className="text-muted-foreground/50 shrink-0">{(f.size / 1024).toFixed(0)} KB</span>
+                <button onClick={() => setAttachments(p => p.filter((_, j) => j !== i))} className="text-destructive/70 hover:text-destructive shrink-0">✕</button>
               </div>
             ))}
           </div>

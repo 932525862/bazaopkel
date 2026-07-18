@@ -2,15 +2,17 @@ import { useState, useEffect, useMemo } from "react";
 import {
   ChevronLeft, ChevronDown, ChevronUp, Search, Pencil, Check, X as XIcon, Lock,
   ArrowDownCircle, ArrowUpCircle, Truck, CheckSquare, Building2,
-  IdCard, Trash2, Share2, Archive as ArchiveIcon, Download,
+  IdCard, Trash2, Share2, Archive as ArchiveIcon, Download, Camera,
 } from "lucide-react";
 import { toast } from "sonner";
 import { API } from "@/lib/api/client";
 import {
   getWarehouseArchive,
+  getAllChiqimRecordsGlobal,
   updateWarehouseArchiveEntry,
   type Warehouse,
   type WarehouseArchiveEntry,
+  type ChiqimPhoto,
 } from "@/lib/warehouse";
 import { exportWarehouseKirim, exportWarehouseChiqim, exportWarehouseSelected } from "@/lib/warehouse-excel";
 
@@ -35,6 +37,20 @@ const EVENT_META: Record<string, { label: string; icon: typeof Truck; cls: strin
   RECORD_EDITED:          { label: "Tahrirlandi",         icon: Pencil,          cls: "bg-sky-50 text-sky-600 border-sky-200" },
 };
 
+/** Kun sarlavhasi: Bugun / Kecha / to'liq sana */
+function fmtDayLabel(dayKey: string): string {
+  const now = new Date();
+  const todayKey = now.toLocaleDateString("en-CA");
+  const yesterdayKey = new Date(now.getTime() - 86400000).toLocaleDateString("en-CA");
+  if (dayKey === todayKey) return "Bugun";
+  if (dayKey === yesterdayKey) return "Kecha";
+  try {
+    return new Date(dayKey).toLocaleDateString("uz-UZ", { day: "numeric", month: "long", year: "numeric" });
+  } catch {
+    return dayKey;
+  }
+}
+
 const FILTERS: { key: string; label: string; events: string[] }[] = [
   { key: "all",      label: "Barchasi",   events: [] },
   { key: "kirim",    label: "Kirim",      events: ["KIRIM_CREATED", "TRUCK_RECEIVED", "TRUCK_PARTIAL_RECEIVED", "TRANSFER_RECEIVED"] },
@@ -49,7 +65,8 @@ function TotalsGrid({ totals }: { totals: any }) {
   if (!totals) return null;
   const cells = [
     { label: "Joy", val: totals.joys },
-    { label: "Soni", val: totals.quantity ?? totals.qty },
+    // Dona (soni) — butun son bo'lishi shart (mahsulotni bo'lib bo'lmaydi)
+    { label: "Soni", val: Math.round(totals.quantity ?? totals.qty ?? 0) },
     { label: "Brutto (kg)", val: totals.bruttoKg },
     { label: "Hajm (m³)", val: totals.volumeM3 ?? totals.vol },
   ];
@@ -96,7 +113,7 @@ function CargoBlock({ cargo, ratio }: { cargo: any; ratio?: number }) {
                 )}
               </p>
               <p className="text-[9px] text-[#9CA3AF] mt-0.5">
-                {pr.joys ?? 0} joy · {pr.quantity ?? 0} dona · {pr.bruttoKg ?? 0} kg · {pr.volumeM3 ?? 0} m³
+                {pr.joys ?? 0} joy · {Math.round(pr.quantity ?? 0)} dona · {pr.bruttoKg ?? 0} kg · {pr.volumeM3 ?? 0} m³
               </p>
               {pr.note && <p className="text-[9px] italic text-[#9CA3AF]">{pr.note}</p>}
             </div>
@@ -109,6 +126,45 @@ function CargoBlock({ cargo, ratio }: { cargo: any; ratio?: number }) {
   );
 }
 
+/** Arxiv yozuvidagi chiqim(lar)ga tegishli fura rasmlari (chiqimRecordId bo'yicha) */
+function collectEntryPhotos(d: any, photoMap: Record<string, ChiqimPhoto[]>): ChiqimPhoto[] {
+  const ids = new Set<string>();
+  if (d?.chiqimRecordId) ids.add(d.chiqimRecordId);
+  if (Array.isArray(d?.chiqimRecordIds)) d.chiqimRecordIds.forEach((id: string) => id && ids.add(id));
+  if (Array.isArray(d?.items)) d.items.forEach((it: any) => it?.chiqimRecordId && ids.add(it.chiqimRecordId));
+  const out: ChiqimPhoto[] = [];
+  const seen = new Set<string>();
+  for (const id of ids) {
+    for (const ph of photoMap[id] ?? []) {
+      if (ph?.dataUrl && !seen.has(ph.dataUrl)) { seen.add(ph.dataUrl); out.push(ph); }
+    }
+  }
+  return out;
+}
+
+/** Fura rasmlari — arxivda (yo'lga chiqqan/qabul qilingan yuk uchun) */
+function TruckPhotos({ photos }: { photos: ChiqimPhoto[] }) {
+  if (!photos.length) return null;
+  return (
+    <div className="bg-white border border-[#EEF0F5] rounded-lg p-2 mt-1.5">
+      <p className="text-[9px] font-black text-[#9CA3AF] uppercase tracking-wider mb-1.5 flex items-center gap-1">
+        <Camera className="w-3 h-3" /> Fura rasmi ({photos.length})
+      </p>
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {photos.map((ph, i) => (
+          <img
+            key={i}
+            src={ph.dataUrl}
+            alt={ph.name}
+            onClick={() => window.open(ph.dataUrl, "_blank")}
+            className="w-16 h-16 rounded-lg object-cover shrink-0 border border-[#EEF0F5] cursor-pointer hover:opacity-90 transition-opacity"
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 interface Props {
   warehouse: Warehouse;
   onClose: () => void;
@@ -116,6 +172,7 @@ interface Props {
 
 export function WarehouseArchivePanel({ warehouse, onClose }: Props) {
   const [entries, setEntries] = useState<WarehouseArchiveEntry[]>([]);
+  const [photoMap, setPhotoMap] = useState<Record<string, ChiqimPhoto[]>>({});
   const [loading, setLoading] = useState(true);
   const [canEdit, setCanEdit] = useState(false);
   const [query, setQuery] = useState("");
@@ -134,6 +191,15 @@ export function WarehouseArchivePanel({ warehouse, onClose }: Props) {
       return n;
     });
 
+  // Fura raqami bo'yicha jamlangan (dropdown) bloklar — standart holatda yig'ilgan
+  const [expandedVehicles, setExpandedVehicles] = useState<Set<string>>(new Set());
+  const toggleVehicle = (key: string) =>
+    setExpandedVehicles(prev => {
+      const n = new Set(prev);
+      if (n.has(key)) n.delete(key); else n.add(key);
+      return n;
+    });
+
   // Excelga faqat tanlangan yozuvlarni yuklab olish uchun belgilash
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const toggleSelect = (id: string) =>
@@ -147,8 +213,16 @@ export function WarehouseArchivePanel({ warehouse, onClose }: Props) {
   const load = async () => {
     setLoading(true);
     try {
-      const list = await getWarehouseArchive(warehouse.id);
+      // Arxiv yozuvlari + fura rasmlarini (chiqim yozuvlaridan) birga yuklaymiz.
+      // Rasmlar chiqim yozuvida saqlanadi; arxivda chiqimRecordId bo'yicha bog'lanadi.
+      const [list, chiqims] = await Promise.all([
+        getWarehouseArchive(warehouse.id),
+        getAllChiqimRecordsGlobal().catch(() => []),
+      ]);
       setEntries(list);
+      const map: Record<string, ChiqimPhoto[]> = {};
+      for (const cr of chiqims) if ((cr.photos ?? []).length) map[cr.id] = cr.photos;
+      setPhotoMap(map);
     } catch (err: any) {
       toast.error(err?.message || "Arxivni yuklashda xatolik");
     } finally {
@@ -180,6 +254,20 @@ export function WarehouseArchivePanel({ warehouse, onClose }: Props) {
       );
     });
   }, [entries, filter, query]);
+
+  // Fura raqami bo'yicha jamlash — 200-300 ta yozuv bo'lsa ham fura bo'yicha yig'iladi.
+  // Furasi yo'q yozuvlar (masalan ba'zi o'tkazmalar) alohida guruhga tushadi.
+  const vehicleGroups = useMemo(() => {
+    const map = new Map<string, { key: string; label: string; items: WarehouseArchiveEntry[] }>();
+    for (const e of filtered) {
+      const vn = String((e.details ?? {}).vehicleNumber || "").trim();
+      const key = vn || "__none__";
+      const label = vn || "Fura ko'rsatilmagan";
+      if (!map.has(key)) map.set(key, { key, label, items: [] });
+      map.get(key)!.items.push(e);
+    }
+    return Array.from(map.values());
+  }, [filtered]);
 
   const startEdit = (e: WarehouseArchiveEntry) => {
     setEditingId(e.id);
@@ -265,9 +353,17 @@ export function WarehouseArchivePanel({ warehouse, onClose }: Props) {
             O'chirib bo'lmaydigan tarix · {canEdit ? "Tahrirlash huquqingiz bor" : "Faqat ko'rish"}
           </p>
         </div>
-        <span className="text-[11px] px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 font-black shrink-0">
-          {entries.length} ta yozuv
-        </span>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <span className="hidden sm:inline text-[11px] px-2.5 py-1 rounded-lg bg-blue-50 text-blue-600 border border-blue-100 font-black">
+            {entries.filter(e => FILTERS.find(f => f.key === "kirim")!.events.includes(e.eventType)).length} kirim
+          </span>
+          <span className="hidden sm:inline text-[11px] px-2.5 py-1 rounded-lg bg-amber-50 text-amber-600 border border-amber-100 font-black">
+            {entries.filter(e => FILTERS.find(f => f.key === "chiqim")!.events.includes(e.eventType)).length} chiqim
+          </span>
+          <span className="text-[11px] px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 font-black">
+            {entries.length} ta yozuv
+          </span>
+        </div>
       </div>
 
       {/* Search + filters */}
@@ -361,22 +457,49 @@ export function WarehouseArchivePanel({ warehouse, onClose }: Props) {
             <p className="text-xs text-[#C4C9D4] mt-1">Ombor hodisalari shu yerda saqlanadi</p>
           </div>
         ) : (
-          <div className="space-y-2 max-w-3xl mx-auto">
-            {filtered.map(e => {
+          <div className="space-y-2.5 max-w-3xl mx-auto">
+            {vehicleGroups.map(group => {
+              const vOpen = expandedVehicles.has(group.key);
+              const codes = Array.from(new Set(group.items.map(e => String((e.details ?? {}).clientCode || "")).filter(Boolean)));
+              const latest = group.items[0]?.createdAt;
+              return (
+                <div key={group.key} className="rounded-2xl border border-[#DDE1EA] bg-white shadow-sm overflow-hidden">
+                  {/* Fura sarlavhasi — jamlangan (dropdown) */}
+                  <button onClick={() => toggleVehicle(group.key)} className={`w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-[#F5F8FF] transition-colors ${vOpen ? "border-b border-[#EEF0F5]" : ""}`}>
+                    <div className="w-9 h-9 rounded-xl bg-[#EFF6FF] flex items-center justify-center shrink-0">
+                      <Truck className="w-4.5 h-4.5 text-[#005AB5]" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-black font-mono text-[#111827]">{group.label}</span>
+                        <span className="text-[10px] font-bold text-[#005AB5] bg-[#EFF6FF] border border-[#DBEAFE] px-1.5 py-0.5 rounded-md">{group.items.length} hodisa</span>
+                      </div>
+                      <p className="text-[11px] text-[#9CA3AF] mt-0.5 truncate">
+                        {codes.slice(0, 4).join(", ")}{codes.length > 4 ? ` +${codes.length - 4}` : ""}{codes.length ? " · " : ""}oxirgi: {latest ? fmtDateTime(latest) : "—"}
+                      </p>
+                    </div>
+                    <ChevronDown className={`w-4.5 h-4.5 text-[#9CA3AF] shrink-0 transition-transform ${vOpen ? "rotate-180" : ""}`} />
+                  </button>
+                  {vOpen && (
+                    <div className="p-3 space-y-2 bg-[#FAFBFE]">
+                      {group.items.map(e => {
               const meta = EVENT_META[e.eventType] ?? { label: e.eventType, icon: ArrowUpCircle, cls: "bg-slate-50 text-slate-600 border-slate-200" };
               const Icon = meta.icon;
               const isEditing = editingId === e.id;
               const d = e.details ?? {};
+              const entryPhotos = collectEntryPhotos(d, photoMap);
               const hasMore = !!(
                 d.cargo ||
                 (Array.isArray(d.cargos) && d.cargos.length) ||
                 (Array.isArray(d.items) && d.items.length) ||
-                (Array.isArray(d.products) && d.products.length)
+                (Array.isArray(d.products) && d.products.length) ||
+                entryPhotos.length
               );
               const expanded = expandedIds.has(e.id);
               const isSelected = selectedIds.has(e.id);
               return (
-                <div key={e.id} className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${isSelected ? "border-[#005AB5] ring-1 ring-[#005AB5]/30" : "border-[#DDE1EA]"}`}>
+                <div key={e.id}>
+                <div className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${isSelected ? "border-[#005AB5] ring-1 ring-[#005AB5]/30" : "border-[#DDE1EA]"}`}>
                   <div className="flex items-start gap-3 px-4 py-3">
                     <input
                       type="checkbox"
@@ -438,6 +561,7 @@ export function WarehouseArchivePanel({ warehouse, onClose }: Props) {
                       )}
                       {expanded && (
                         <div className="mt-0.5">
+                          <TruckPhotos photos={entryPhotos} />
                           {d.cargo && <CargoBlock cargo={d.cargo} ratio={typeof d.ratio === "number" ? d.ratio : undefined} />}
                           {Array.isArray(d.cargos) && d.cargos.map((c: any, i: number) => (
                             <CargoBlock key={i} cargo={c} ratio={typeof c.ratio === "number" ? c.ratio : undefined} />
@@ -525,6 +649,12 @@ export function WarehouseArchivePanel({ warehouse, onClose }: Props) {
                       </button>
                     )}
                   </div>
+                </div>
+                </div>
+              );
+                      })}
+                    </div>
+                  )}
                 </div>
               );
             })}

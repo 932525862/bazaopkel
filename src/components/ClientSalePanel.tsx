@@ -65,9 +65,9 @@ export function ClientSalePanel({ client, onRefresh, readOnly = false, attachedT
     if (total <= 0) { toast.error("To'lov summasini kiriting"); return; }
     setLoading(true);
     try {
-      await API.setSale(client.id, { status: "full", totalAmount: total, paidAmount: total, additionalPrice: addAmt });
+      await API.setSale(client.id, { status: "full", totalAmount: total, paidAmount: total, additionalPrice: addAmt, resale: sale.status !== "none" });
       await API.updateClient(client.id, { stage: "sold" });
-      toast.success("Sotildi (to'liq)");
+      toast.success(sale.status !== "none" ? "Qayta sotildi (to'liq)" : "Sotildi (to'liq)");
       setShowPurchase(false);
       setFullBase(""); setFullAdditional("");
       await refresh();
@@ -94,9 +94,10 @@ export function ClientSalePanel({ client, onRefresh, readOnly = false, attachedT
         additionalPrice: addAmt,
         nextPaymentAt: tashkentInputToIso(partialNextDate),
         telegramId: leaseWarningTelegramId,
+        resale: sale.status !== "none",
       });
       await API.updateClient(client.id, { stage: "sold" });
-      toast.success("Sotildi (bir qismi)");
+      toast.success(sale.status !== "none" ? "Qayta sotildi (bir qismi)" : "Sotildi (bir qismi)");
       setShowPurchase(false);
       setPartialBase(""); setPartialAdditional(""); setPartialPaid(""); setPartialNextDate("");
       setLeaseWarningTelegramId(null);
@@ -137,13 +138,21 @@ export function ClientSalePanel({ client, onRefresh, readOnly = false, attachedT
 
   const handleCompletePayment = async () => {
     setLoading(true);
+    let paymentAdded = false;
     try {
-      if (remaining > 0) await API.addPayment(client.id, remaining);
+      if (remaining > 0) {
+        await API.addPayment(client.id, remaining);
+        paymentAdded = true;
+      }
       await API.setSale(client.id, { status: "full" });
       toast.success("To'lov yakunlandi");
       await refresh();
     } catch (err: any) {
       toast.error(err.message || "Xatolik yuz berdi");
+      // MUHIM: to'lov qo'shilib bo'lgan bo'lsa, holatni darhol yangilaymiz —
+      // aks holda "remaining" eski qiymatda qolib, qayta bosishda to'lov
+      // IKKINCHI marta qo'shilib ketardi (real puldagi dublikat).
+      if (paymentAdded) await refresh().catch(() => {});
     } finally { setLoading(false); }
   };
 
@@ -166,7 +175,7 @@ export function ClientSalePanel({ client, onRefresh, readOnly = false, attachedT
           </button>
         )}
 
-        {sale.status === "none" && showPurchase && purchaseMode === "choose" && (
+        {showPurchase && purchaseMode === "choose" && (
           <div className="grid grid-cols-2 gap-2">
             <button onClick={() => setPurchaseMode("full")} className="py-3 rounded-lg bg-success text-success-foreground font-medium">
               To'liq to'lov
@@ -183,7 +192,7 @@ export function ClientSalePanel({ client, onRefresh, readOnly = false, attachedT
           </div>
         )}
 
-        {sale.status === "none" && purchaseMode === "full" && (
+        {showPurchase && purchaseMode === "full" && (
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-2">
               <div>
@@ -206,7 +215,7 @@ export function ClientSalePanel({ client, onRefresh, readOnly = false, attachedT
           </div>
         )}
 
-        {sale.status === "none" && purchaseMode === "partial" && (
+        {showPurchase && purchaseMode === "partial" && (
           <div className="space-y-2">
             <div className="grid grid-cols-2 gap-2">
               <div>
@@ -268,6 +277,16 @@ export function ClientSalePanel({ client, onRefresh, readOnly = false, attachedT
                   <div className="font-bold text-destructive">{(remaining > 0 ? remaining : 0).toLocaleString()}</div>
                 </div>
               </div>
+            )}
+
+            {/* Qayta sotuv — mavjud sotuvga QO'SHILADI (jami o'sadi, tarix va statistikaga tushadi) */}
+            {sale.status !== "none" && !showPurchase && !readOnly && sessionActive && (
+              <button
+                onClick={() => { setShowPurchase(true); setPurchaseMode("choose"); }}
+                className="w-full py-2 rounded-lg bg-success/15 text-success text-sm font-bold hover:bg-success/25 transition-colors flex items-center justify-center gap-2"
+              >
+                <ShoppingCart className="w-4 h-4" /> Qayta sotuv
+              </button>
             )}
 
             {sale.status === "partial" && remaining > 0 && sale.nextPaymentAt && (

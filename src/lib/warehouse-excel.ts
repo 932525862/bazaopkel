@@ -2,9 +2,12 @@
 import { downloadXlsx, type SheetData, type CellValue } from "./xlsx-export";
 import type { WarehouseArchiveEntry, WarehouseDamageEntry } from "./warehouse";
 
-// Panel filtrlaridagi hodisa turlari bilan bir xil guruhlash
+// Panel filtrlaridagi hodisa turlari bilan bir xil guruhlash.
+// MUHIM: CHIQIM_DELIVERED bu yerga KIRMAYDI — panelda ham u alohida "Yetkazildi"
+// filtri. Ilgari qo'shilgani sabab bitta yuk ham CHIQIM_SENT, ham CHIQIM_DELIVERED
+// qatori bilan IKKI MARTA eksport bo'lib, JAMI oshiq chiqar edi.
 export const KIRIM_EVENTS = ["KIRIM_CREATED", "TRUCK_RECEIVED", "TRUCK_PARTIAL_RECEIVED", "TRANSFER_RECEIVED"];
-export const CHIQIM_EVENTS = ["CHIQIM_SENT", "DISPATCH_TO_CLIENT", "TRANSFER_SENT", "REMAINDER_FORWARDED", "CHIQIM_DELIVERED"];
+export const CHIQIM_EVENTS = ["CHIQIM_SENT", "DISPATCH_TO_CLIENT", "TRANSFER_SENT", "REMAINDER_FORWARDED"];
 
 const EVENT_LABEL: Record<string, string> = {
   KIRIM_CREATED: "Kirim",
@@ -64,6 +67,12 @@ const num = (v: any): CellValue => {
   return Number.isFinite(n) ? n : "";
 };
 
+// Dona (soni) — butun son bo'lishi shart (mahsulotni bo'lib bo'lmaydi)
+const intNum = (v: any): CellValue => {
+  const n = num(v);
+  return typeof n === "number" ? Math.round(n) : n;
+};
+
 const HEADERS = [
   "Sana", "Vaqt", "Hodisa", "Mijoz kodi", "Mijoz ismi", "Telefon", "Fura",
   "Yo'nalish", "Tovar", "Joy", "Soni (dona)", "Brutto (kg)", "Hajm (m³)",
@@ -71,6 +80,10 @@ const HEADERS = [
 ];
 
 function fmtDate(iso: string): string {
+  // "YYYY-MM-DD" (sana-only ustunlar) to'g'ridan-to'g'ri formatlanadi —
+  // new Date() UTC deb o'qib, manfiy zonalarda bir kun orqaga surar edi.
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso ?? ""));
+  if (m) return `${m[3]}.${m[2]}.${m[1]}`;
   try { return new Date(iso).toLocaleDateString("uz-UZ", { day: "2-digit", month: "2-digit", year: "numeric" }); }
   catch { return String(iso ?? "").slice(0, 10); }
 }
@@ -114,16 +127,22 @@ function buildRows(entries: WarehouseArchiveEntry[]): { rows: CellValue[][]; tot
       const prods = Array.isArray(c.products) ? c.products : [];
       if (prods.length === 0) {
         const t = c.totals ?? {};
+        // Yig'indiga QO'SHILADI — ilgari bu qatorlar JAMI'ga kirmay qolar edi
+        const joys = num(t.joys), qty = intNum(t.quantity ?? t.qty), brutto = num(t.bruttoKg), vol = num(t.volumeM3 ?? t.vol);
+        if (typeof joys === "number") tJoys += joys;
+        if (typeof qty === "number") tQty += qty;
+        if (typeof brutto === "number") tBrutto += brutto;
+        if (typeof vol === "number") tVol += vol;
         rows.push([
           fmtDate(e.createdAt), fmtTime(e.createdAt), label,
           c.clientCode ?? "", c.clientName ?? "", c.clientPhone ?? "", c.vehicleNumber ?? "",
-          dir, "", num(t.joys), num(t.quantity ?? t.qty), num(t.bruttoKg), num(t.volumeM3 ?? t.vol),
+          dir, "", joys, qty, brutto, vol,
           typeof c.ratio === "number" ? Math.round(c.ratio * 100) : "", e.note ?? "", e.createdByName ?? "",
         ]);
         continue;
       }
       for (const pr of prods) {
-        const joys = num(pr.joys), qty = num(pr.quantity ?? pr.qty), brutto = num(pr.bruttoKg), vol = num(pr.volumeM3 ?? pr.vol);
+        const joys = num(pr.joys), qty = intNum(pr.quantity ?? pr.qty), brutto = num(pr.bruttoKg), vol = num(pr.volumeM3 ?? pr.vol);
         if (typeof joys === "number") tJoys += joys;
         if (typeof qty === "number") tQty += qty;
         if (typeof brutto === "number") tBrutto += brutto;
@@ -181,18 +200,18 @@ export function exportWarehouseSelected(warehouseName: string, selectedEntries: 
 }
 
 // ══════════════════════════════════════════════════════════════
-// ZARARLANGAN YUKLAR — .xlsx eksport (to'liq ma'lumot bilan)
+// QABUL QILINMAGAN YUKLAR — .xlsx eksport (to'liq ma'lumot bilan)
 // ══════════════════════════════════════════════════════════════
 
 const DAMAGE_HEADERS = [
   "Qabul sanasi", "Qayd vaqti", "Fura", "Mijoz kodi", "Mijoz ismi",
-  "Manba ombor", "Qabul ombori", "Zarar (dona)",
+  "Manba ombor", "Qabul ombori", "Qabul qilinmagan (dona)",
   "Yukdagi jami (dona)", "Yuk joy", "Yuk brutto (kg)", "Yuk hajm (m³)",
-  "Tovarlar", "Zarar sababi", "Kim qayd etdi",
+  "Tovarlar", "Qabul qilinmaslik sababi", "Kim qayd etdi",
 ];
 
-/** Zarar yozuvlarini .xlsx qilib yuklab olish (tanlanganlar yoki hammasi) */
-export function exportDamagesExcel(entries: WarehouseDamageEntry[], label: string = "zararlangan_yuklar"): number {
+/** Qabul qilinmagan tovar yozuvlarini .xlsx qilib yuklab olish (tanlanganlar yoki hammasi) */
+export function exportDamagesExcel(entries: WarehouseDamageEntry[], label: string = "qabul_qilinmagan_yuklar"): number {
   const rows: CellValue[][] = [DAMAGE_HEADERS];
   let totalDamaged = 0;
 
@@ -217,7 +236,7 @@ export function exportDamagesExcel(entries: WarehouseDamageEntry[], label: strin
   rows.push([]);
   rows.push(["", "", "JAMI", "", "", "", "", Math.round(totalDamaged * 100) / 100, "", "", "", "", "", "", ""]);
 
-  const sheet: SheetData = { name: "Zararlangan yuklar", rows };
+  const sheet: SheetData = { name: "Qabul qilinmagan yuklar", rows };
   downloadXlsx(`${safeFile(label)}_${today()}.xlsx`, [sheet]);
   return entries.length;
 }
