@@ -6,7 +6,7 @@ import { registerPushNotifications } from "@/lib/push-notification";
 import { formatUzbekPhone } from "@/lib/utils";
 import { Briefcase } from "lucide-react";
 import { toast } from "sonner";
-import logo from "../logo.png"
+import logo from "../texlogo.png"
 
 export const Route = createFileRoute("/login")({
   head: () => ({
@@ -62,9 +62,9 @@ function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-[var(--gradient-soft)] px-4 py-12">
       <div className="w-full max-w-md">
         <div className="bg-card rounded-2xl border border-border p-8 shadow-[var(--shadow-lg)]">
-          <div className="w-14 h-14 rounded-xl bg-[var(--gradient-primary)] flex items-center justify-center text-primary-foreground mb-5 mx-auto shadow-[var(--shadow-md)]">
+          <div className="w-34 h-14 rounded-xl bg-[var(--gradient-primary)] flex items-center justify-center text-primary-foreground mb-5 mx-auto shadow-[var(--shadow-md)]">
             {/* <Briefcase className="w-7 h-7" /> */}
-            <img className="w-12 h-12" src={logo} alt="Logo" />
+            <img className="w-32 h-14" src={logo} alt="Logo" />
           </div>
           <h1 className="text-2xl font-bold text-center text-foreground">
            Obkelogist CRM tizimiga xush kelibsiz
