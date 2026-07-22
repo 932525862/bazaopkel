@@ -88,7 +88,7 @@ function PublicForm() {
       </div>
     );
   }
-
+  
   return (
     <div className="min-h-screen relative py-10 px-4 overflow-hidden">
       <div
