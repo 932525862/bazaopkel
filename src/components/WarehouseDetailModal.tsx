@@ -227,13 +227,16 @@ export function computeTake(
     ratio = entered > 0 && availBasis > 0 ? avail * Math.min(1, entered / availBasis) : 0;
   }
 
-  // 2) Dona butun songa yaxlitlanadi (mavjud butun zaxiradan oshmaydi),
-  //    so'ng effektiv ulush shu butun donadan qayta hisoblanadi.
+  // 2) Dona BUTUN QISMGA (floor) tushiriladi — MAX butun tovarlar soni.
+  //    Masalan 10 joyga 223.6 dona to'g'ri kelsa, olinadigani 223 dona (224 EMAS),
+  //    va joy/hajm/brutto shu 223 donadan proporsional qayta hisoblanadi.
+  //    clean() — suzuvchi nuqta shovqinidan himoya: 222.9999997 avval 223 ga
+  //    tozalanadi, floor esa uni saqlaydi (aks holda 222 bo'lib ketardi).
   let effRatio = ratio;
   let qty = fullQty * ratio;
   if (fullQty > 0) {
-    const availPieces = Math.round(fullQty * avail);
-    const pieces = Math.max(0, Math.min(availPieces, Math.round(fullQty * ratio)));
+    const availPieces = Math.floor(clean(fullQty * avail));
+    const pieces = Math.max(0, Math.min(availPieces, Math.floor(clean(fullQty * ratio))));
     qty = pieces;
     effRatio = pieces / fullQty;
   }
@@ -1567,7 +1570,7 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
         {/* SHU omborda MAVJUD (bucket) ulush — Dona eng yuqori prioritet (butun son) */}
         <div className="grid grid-cols-4 gap-px bg-border/40 border-y border-border/40">
           {[
-            { label: "Soni", val: fullQty ? Math.round(fullQty * available) : "—", sub: "dona" },
+            { label: "Soni", val: fullQty ? Math.floor(clean(fullQty * available)) : "—", sub: "dona" },
             { label: "Joy", val: totalJoys ? clean(totalJoys * available) : "—", sub: "joy" },
             { label: "Brutto", val: p.brutto ? clean(bruttoKg(p) * available) : "—", sub: p.bruttoUnit || "kg" },
             { label: "Hajm", val: fullVol ? clean(fullVol * available) : "—", sub: "m³" },
@@ -4703,7 +4706,7 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
                         const totalJoys = p.places.reduce((s, pl) => s + (parseFloat(pl.count) || 0), 0);
                         const isPartialStock = available < 0.9995;
                         // Qolgan (chiqarilmagan) miqdorlar — mavjud ulush (available) bilan
-                        const remQty = Math.round((parseFloat(p.quantity) || 0) * available);
+                        const remQty = Math.floor(clean((parseFloat(p.quantity) || 0) * available));
                         const remBrutto = fmt2(bruttoKg(p) * available);
                         const remVol = fmt3((parseFloat(p.totalVolume || "0") || 0) * available);
                         return (
@@ -6620,7 +6623,7 @@ export function WarehouseDetailModal({ warehouse, onClose }: Props) {
                         const totalJoys = p.places.reduce((s, pl) => s + (parseFloat(pl.count) || 0), 0);
                         const isPartialStock = available < 0.9995;
                         // Qolgan (chiqarilmagan) miqdorlar — mavjud ulush (available) bilan
-                        const remQty = Math.round((parseFloat(p.quantity) || 0) * available);
+                        const remQty = Math.floor(clean((parseFloat(p.quantity) || 0) * available));
                         const remBrutto = fmt2(bruttoKg(p) * available);
                         const remVol = fmt3((parseFloat(p.totalVolume || "0") || 0) * available);
                         return (
